@@ -1,10 +1,13 @@
 from pathlib import Path
 
+import pytest
 import sqlglot
 from sqlglot import exp
 
 from fakesnow.transforms import (
     SUCCESS_NOP,
+    _get_to_number_args,
+    array_agg_within_group,
     array_size,
     create_database,
     describe_table,
@@ -23,7 +26,6 @@ from fakesnow.transforms import (
     json_extract_cast_as_varchar,
     json_extract_precedence,
     object_construct,
-    parse_json,
     random,
     regex_replace,
     regex_substr,
@@ -39,6 +41,7 @@ from fakesnow.transforms import (
     to_decimal,
     to_timestamp,
     to_timestamp_ntz,
+    try_parse_json,
     upper_case_unquoted_identifiers,
     values_columns,
 )
@@ -48,6 +51,31 @@ def test_array_size() -> None:
     assert (
         sqlglot.parse_one("""select array_size(parse_json('["a","b"]'))""").transform(array_size).sql(dialect="duckdb")
         == """SELECT CASE WHEN JSON_ARRAY_LENGTH(JSON('["a","b"]')) THEN JSON_ARRAY_LENGTH(JSON('["a","b"]')) END"""
+    )
+
+
+def test_array_agg_within_group() -> None:
+    assert (
+        sqlglot.parse_one(
+            "SELECT someid, ARRAY_AGG(DISTINCT id) WITHIN GROUP (ORDER BY id) AS ids FROM example GROUP BY someid"
+        )
+        .transform(array_agg_within_group)
+        .sql(dialect="duckdb")
+        == "SELECT someid, ARRAY_AGG(DISTINCT id ORDER BY id NULLS FIRST) AS ids FROM example GROUP BY someid"
+    )
+
+    assert (
+        sqlglot.parse_one(
+            "SELECT someid, ARRAY_AGG(id) WITHIN GROUP (ORDER BY id DESC) AS ids FROM example WHERE someid IS NOT NULL GROUP BY someid"  # noqa: E501
+        )
+        .transform(array_agg_within_group)
+        .sql(dialect="duckdb")
+        == "SELECT someid, ARRAY_AGG(id ORDER BY id DESC) AS ids FROM example WHERE NOT someid IS NULL GROUP BY someid"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT ARRAY_AGG(id) FROM example").transform(array_agg_within_group).sql(dialect="duckdb")
+        == "SELECT ARRAY_AGG(id) FROM example"
     )
 
 
@@ -247,7 +275,7 @@ def test_json_extract_precedence() -> None:
         )
         .transform(json_extract_precedence)
         .sql(dialect="duckdb")
-        == """SELECT {'K1': {'K2': 1}} AS col WHERE (col -> '$.K1' -> '$.K2') > 0"""
+        == """SELECT {'K1': {'K2': 1}} AS col WHERE (col -> '$.K1.K2') > 0"""
     )
 
 
@@ -260,15 +288,6 @@ def test_object_construct() -> None:
         .transform(object_construct)
         .sql(dialect="duckdb")
         == "SELECT TO_JSON({'a': 1, 'b': 'BBBB', 'd': JSON('NULL')})"
-    )
-
-
-def test_parse_json() -> None:
-    assert (
-        sqlglot.parse_one("""insert into table1 (name) select parse_json('{"first":"foo", "last":"bar"}')""")
-        .transform(parse_json)
-        .sql(dialect="duckdb")
-        == """INSERT INTO table1 (name) SELECT JSON('{"first":"foo", "last":"bar"}')"""
     )
 
 
@@ -404,6 +423,153 @@ def test_use() -> None:
     assert (
         sqlglot.parse_one("use schema foo.bar").transform(set_schema, current_database="marts").sql()
         == "SET schema = 'foo.bar'"
+    )
+
+
+def test__get_to_number_args() -> None:
+    e = sqlglot.parse_one("to_number('100')", read="snowflake")
+    assert isinstance(e, exp.ToNumber)
+    assert _get_to_number_args(e) == (None, None, None)
+
+    e = sqlglot.parse_one("to_number('100', 10)", read="snowflake")
+    assert isinstance(e, exp.ToNumber)
+    assert _get_to_number_args(e) == (None, exp.Literal(this="10", is_string=False), None)
+
+    e = sqlglot.parse_one("to_number('100', 10,2)", read="snowflake")
+    assert isinstance(e, exp.ToNumber)
+    assert _get_to_number_args(e) == (
+        None,
+        exp.Literal(this="10", is_string=False),
+        exp.Literal(this="2", is_string=False),
+    )
+
+    e = sqlglot.parse_one("to_number('100', 'TM9')", read="snowflake")
+    assert isinstance(e, exp.ToNumber)
+    assert _get_to_number_args(e) == (exp.Literal(this="TM9", is_string=True), None, None)
+
+    e = sqlglot.parse_one("to_number('100', 'TM9', 10)", read="snowflake")
+    assert isinstance(e, exp.ToNumber)
+    assert _get_to_number_args(e) == (
+        exp.Literal(this="TM9", is_string=True),
+        exp.Literal(this="10", is_string=False),
+        None,
+    )
+
+    e = sqlglot.parse_one("to_number('100', 'TM9', 10, 2)", read="snowflake")
+    assert isinstance(e, exp.ToNumber)
+    assert _get_to_number_args(e) == (
+        exp.Literal(this="TM9", is_string=True),
+        exp.Literal(this="10", is_string=False),
+        exp.Literal(this="2", is_string=False),
+    )
+
+
+def test_to_number() -> None:
+    assert (
+        sqlglot.parse_one("SELECT to_number('100')", read="snowflake").transform(to_decimal).sql(dialect="duckdb")
+        == "SELECT CAST('100' AS DECIMAL(38, 0))"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT to_number('100', 10)", read="snowflake").transform(to_decimal).sql(dialect="duckdb")
+        == "SELECT CAST('100' AS DECIMAL(10, 0))"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT to_number('100', 10,2)", read="snowflake").transform(to_decimal).sql(dialect="duckdb")
+        == "SELECT CAST('100' AS DECIMAL(10, 2))"
+    )
+
+    with pytest.raises(NotImplementedError):
+        sqlglot.parse_one("SELECT to_number('100', 'TM9')", read="snowflake").transform(to_decimal).sql(
+            dialect="duckdb"
+        )
+
+    with pytest.raises(NotImplementedError):
+        sqlglot.parse_one("SELECT to_number('100', 'TM9', 10)", read="snowflake").transform(to_decimal).sql(
+            dialect="duckdb"
+        )
+
+    with pytest.raises(NotImplementedError):
+        sqlglot.parse_one("SELECT to_number('100', 'TM9', 10, 2)", read="snowflake").transform(to_decimal).sql(
+            dialect="duckdb"
+        )
+
+
+def test_to_number_decimal() -> None:
+    assert (
+        sqlglot.parse_one("SELECT to_decimal('100')", read="snowflake").transform(to_decimal).sql(dialect="duckdb")
+        == "SELECT CAST('100' AS DECIMAL(38, 0))"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT to_decimal('100', 10)", read="snowflake").transform(to_decimal).sql(dialect="duckdb")
+        == "SELECT CAST('100' AS DECIMAL(10, 0))"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT to_decimal('100', 10,2)", read="snowflake")
+        .transform(to_decimal)
+        .sql(dialect="duckdb")
+        == "SELECT CAST('100' AS DECIMAL(10, 2))"
+    )
+
+    with pytest.raises(NotImplementedError):
+        sqlglot.parse_one("SELECT to_decimal('100', 'TM9')", read="snowflake").transform(to_decimal).sql(
+            dialect="duckdb"
+        )
+
+    with pytest.raises(NotImplementedError):
+        sqlglot.parse_one("SELECT to_decimal('100', 'TM9', 10)", read="snowflake").transform(to_decimal).sql(
+            dialect="duckdb"
+        )
+
+    with pytest.raises(NotImplementedError):
+        sqlglot.parse_one("SELECT to_decimal('100', 'TM9', 10, 2)", read="snowflake").transform(to_decimal).sql(
+            dialect="duckdb"
+        )
+
+
+def test_to_number_numeric() -> None:
+    assert (
+        sqlglot.parse_one("SELECT to_numeric('100')", read="snowflake").transform(to_decimal).sql(dialect="duckdb")
+        == "SELECT CAST('100' AS DECIMAL(38, 0))"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT to_numeric('100', 10)", read="snowflake").transform(to_decimal).sql(dialect="duckdb")
+        == "SELECT CAST('100' AS DECIMAL(10, 0))"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT to_numeric('100', 10,2)", read="snowflake")
+        .transform(to_decimal)
+        .sql(dialect="duckdb")
+        == "SELECT CAST('100' AS DECIMAL(10, 2))"
+    )
+
+    with pytest.raises(NotImplementedError):
+        sqlglot.parse_one("SELECT to_numeric('100', 'TM9')", read="snowflake").transform(to_decimal).sql(
+            dialect="duckdb"
+        )
+
+    with pytest.raises(NotImplementedError):
+        sqlglot.parse_one("SELECT to_numeric('100', 'TM9', 10)", read="snowflake").transform(to_decimal).sql(
+            dialect="duckdb"
+        )
+
+    with pytest.raises(NotImplementedError):
+        sqlglot.parse_one("SELECT to_numeric('100', 'TM9', 10, 2)", read="snowflake").transform(to_decimal).sql(
+            dialect="duckdb"
+        )
+
+
+def test_try_parse_json() -> None:
+    assert (
+        sqlglot.parse_one("""INSERT INTO table1 (name) SELECT TRY_PARSE_JSON('{"first":"foo", "last":"bar"}')""")
+        .transform(try_parse_json)
+        .sql(dialect="duckdb")
+        == """INSERT INTO table1 (name) SELECT TRY_CAST('{"first":"foo", "last":"bar"}' AS JSON)"""
     )
 
 

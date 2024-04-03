@@ -173,7 +173,7 @@ class FakeSnowflakeCursor:
             .transform(transforms.drop_schema_cascade)
             .transform(transforms.tag)
             .transform(transforms.semi_structured_types)
-            .transform(transforms.parse_json)
+            .transform(transforms.try_parse_json)
             # indices_to_json_extract must be before regex_substr
             .transform(transforms.indices_to_json_extract)
             .transform(transforms.json_extract_cast_as_varchar)
@@ -196,6 +196,8 @@ class FakeSnowflakeCursor:
             .transform(transforms.array_size)
             .transform(transforms.random)
             .transform(transforms.identifier)
+            .transform(transforms.array_agg_within_group)
+            .transform(transforms.array_agg_to_json)
             .transform(lambda e: transforms.show_schemas(e, self._conn.database))
             .transform(lambda e: transforms.show_objects_tables(e, self._conn.database))
             # TODO collapse into a single show_keys function
@@ -619,8 +621,8 @@ class FakeSnowflakeConnection:
             df[col] = df[col].apply(lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x)
 
         escaped_cols = ",".join(f'"{col}"' for col in df.columns.to_list())
-
         self._duck_conn.execute(f"INSERT INTO {table_name}({escaped_cols}) SELECT * FROM df")
+
         return self._duck_conn.fetchall()[0][0]
 
 

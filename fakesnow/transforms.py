@@ -22,6 +22,39 @@ def array_size(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
+def array_agg_to_json(expression: exp.Expression) -> exp.Expression:
+    if isinstance(expression, exp.ArrayAgg):
+        return exp.Anonymous(this="TO_JSON", expressions=[expression])
+
+    return expression
+
+
+def array_agg_within_group(expression: exp.Expression) -> exp.Expression:
+    """Convert ARRAY_AGG(<expr>) WITHIN GROUP (<order-by-clause>) to ARRAY_AGG( <expr> <order-by-clause> )
+    Snowflake uses ARRAY_AGG(<expr>) WITHIN GROUP (ORDER BY <order-by-clause>)
+    to order the array, but DuckDB uses ARRAY_AGG( <expr> <order-by-clause> ).
+    See;
+        - https://docs.snowflake.com/en/sql-reference/functions/array_agg
+        - https://duckdb.org/docs/sql/aggregates.html#order-by-clause-in-aggregate-functions
+    Note; Snowflake has following restriction;
+            If you specify DISTINCT and WITHIN GROUP, both must refer to the same column.
+          Transformation does not handle this restriction.
+    """
+    if (
+        isinstance(expression, exp.WithinGroup)
+        and (agg := expression.find(exp.ArrayAgg))
+        and (order := expression.expression)
+    ):
+        return exp.ArrayAgg(
+            this=exp.Order(
+                this=agg.this,
+                expressions=order.expressions,
+            )
+        )
+
+    return expression
+
+
 # TODO: move this into a Dialect as a transpilation
 def create_database(expression: exp.Expression, db_path: Path | None = None) -> exp.Expression:
     """Transform create database to attach database.
@@ -518,32 +551,6 @@ def object_construct(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
-def parse_json(expression: exp.Expression) -> exp.Expression:
-    """Convert parse_json() to json().
-
-    Example:
-        >>> import sqlglot
-        >>> sqlglot.parse_one("insert into table1 (name) select parse_json('{}')").transform(parse_json).sql()
-        "CREATE TABLE table1 (name JSON)"
-    Args:
-        expression (exp.Expression): the expression that will be transformed.
-
-    Returns:
-        exp.Expression: The transformed expression.
-    """
-
-    if (
-        isinstance(expression, exp.Anonymous)
-        and isinstance(expression.this, str)
-        and expression.this.upper() == "PARSE_JSON"
-    ):
-        new = expression.copy()
-        new.args["this"] = "JSON"
-        return new
-
-    return expression
-
-
 def regex_replace(expression: exp.Expression) -> exp.Expression:
     """Transform regex_replace expressions from snowflake to duckdb."""
 
@@ -829,16 +836,74 @@ def to_date(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
+def _get_to_number_args(e: exp.ToNumber) -> tuple[exp.Expression | None, exp.Expression | None, exp.Expression | None]:
+    arg_format = e.args.get("format")
+    arg_precision = e.args.get("precision")
+    arg_scale = e.args.get("scale")
+
+    _format = None
+    _precision = None
+    _scale = None
+
+    # to_number(value, <format>, <precision>, <scale>)
+    if arg_format:
+        if arg_format.is_string:
+            # to_number('100', 'TM9' ...)
+            _format = arg_format
+
+            # to_number('100', 'TM9', 10 ...)
+            if arg_precision:
+                _precision = arg_precision
+
+                # to_number('100', 'TM9', 10, 2)
+                if arg_scale:
+                    _scale = arg_scale
+            else:
+                pass
+        else:
+            # to_number('100', 10, ...)
+            # arg_format is not a string, so it must be precision.
+            _precision = arg_format
+
+            # to_number('100', 10, 2)
+            # And arg_precision must be scale
+            if arg_precision:
+                _scale = arg_precision
+    else:
+        # If format is not provided, just check for precision and scale directly
+        if arg_precision:
+            _precision = arg_precision
+            if arg_scale:
+                _scale = arg_scale
+
+    return _format, _precision, _scale
+
+
 def to_decimal(expression: exp.Expression) -> exp.Expression:
     """Transform to_decimal, to_number, to_numeric expressions from snowflake to duckdb.
 
     See https://docs.snowflake.com/en/sql-reference/functions/to_decimal
     """
 
+    if isinstance(expression, exp.ToNumber):
+        format_, precision, scale = _get_to_number_args(expression)
+        if format_:
+            raise NotImplementedError(f"{expression.this} with format argument")
+
+        if not precision:
+            precision = exp.Literal(this="38", is_string=False)
+        if not scale:
+            scale = exp.Literal(this="0", is_string=False)
+
+        return exp.Cast(
+            this=expression.this,
+            to=exp.DataType(this=exp.DataType.Type.DECIMAL, expressions=[precision, scale], nested=False, prefix=False),
+        )
+
     if (
         isinstance(expression, exp.Anonymous)
         and isinstance(expression.this, str)
-        and expression.this.upper() in ["TO_DECIMAL", "TO_NUMBER", "TO_NUMERIC"]
+        and expression.this.upper() in ["TO_DECIMAL", "TO_NUMERIC"]
     ):
         expressions: list[exp.Expression] = expression.expressions
 
@@ -901,6 +966,34 @@ def timestamp_ntz_ns(expression: exp.Expression) -> exp.Expression:
         new = expression.copy()
         del new.args["expressions"]
         return new
+
+    return expression
+
+
+def try_parse_json(expression: exp.Expression) -> exp.Expression:
+    """Convert TRY_PARSE_JSON() to TRY_CAST(... as JSON).
+
+    Example:
+        >>> import sqlglot
+        >>> sqlglot.parse_one("select try_parse_json('{}')").transform(parse_json).sql()
+        "SELECT TRY_CAST('{}' AS JSON)"
+    Args:
+        expression (exp.Expression): the expression that will be transformed.
+
+    Returns:
+        exp.Expression: The transformed expression.
+    """
+
+    if (
+        isinstance(expression, exp.Anonymous)
+        and isinstance(expression.this, str)
+        and expression.this.upper() == "TRY_PARSE_JSON"
+    ):
+        expressions = expression.expressions
+        return exp.TryCast(
+            this=expressions[0],
+            to=exp.DataType(this=exp.DataType.Type.JSON, nested=False),
+        )
 
     return expression
 
