@@ -10,6 +10,9 @@ from fakesnow.transforms import (
     array_agg_within_group,
     array_size,
     create_database,
+    dateadd_date_cast,
+    dateadd_string_literal_timestamp_cast,
+    datediff_string_literal_timestamp_cast,
     describe_table,
     drop_schema_cascade,
     extract_comment_on_columns,
@@ -41,7 +44,9 @@ from fakesnow.transforms import (
     to_decimal,
     to_timestamp,
     to_timestamp_ntz,
+    trim_cast_varchar,
     try_parse_json,
+    try_to_decimal,
     upper_case_unquoted_identifiers,
     values_columns,
 )
@@ -105,6 +110,182 @@ def test_drop_schema_cascade() -> None:
     )
 
 
+def test_dateadd_date_cast() -> None:
+    # DAY
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(DAY, 3, '2023-03-03'::DATE) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST('2023-03-03' AS DATE) + INTERVAL 3 DAY AS DATE) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one(
+            "SELECT DATEADD(day, col-1, CAST('2023-04-02' AS DATE))",
+            read="snowflake",
+        )
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST('2023-04-02' AS DATE) + INTERVAL (col - 1) DAY AS DATE)"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(DAY, 3, col::DATE) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST(col AS DATE) + INTERVAL 3 DAY AS DATE) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(DAY, 3, col) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT col + INTERVAL 3 DAY AS D"
+    )
+
+    # WEEk
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(WEEK, 3, '2023-03-03'::DATE) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST('2023-03-03' AS DATE) + (7 * INTERVAL 3 DAY) AS DATE) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one(
+            "SELECT DATEADD(week, col-1, CAST('2023-04-02' AS DATE))",
+            read="snowflake",
+        )
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST('2023-04-02' AS DATE) + (7 * INTERVAL (col - 1) DAY) AS DATE)"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(week, 3, col::DATE) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST(col AS DATE) + (7 * INTERVAL 3 DAY) AS DATE) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(week, 3, col) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT col + (7 * INTERVAL 3 DAY) AS D"
+    )
+
+    # MONTH
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(MONTH, 3, '2023-03-03'::DATE) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST('2023-03-03' AS DATE) + INTERVAL 3 MONTH AS DATE) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one(
+            "SELECT DATEADD(month, col-1, CAST('2023-04-02' AS DATE))",
+            read="snowflake",
+        )
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST('2023-04-02' AS DATE) + INTERVAL (col - 1) MONTH AS DATE)"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(month, 3, col::DATE) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST(col AS DATE) + INTERVAL 3 MONTH AS DATE) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(month, 3, col) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT col + INTERVAL 3 MONTH AS D"
+    )
+
+    # YEAR
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(YEAR, 3, '2023-03-03'::DATE) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST('2023-03-03' AS DATE) + INTERVAL 3 YEAR AS DATE) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one(
+            "SELECT DATEADD(year, col-1, CAST('2023-04-02' AS DATE))",
+            read="snowflake",
+        )
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST('2023-04-02' AS DATE) + INTERVAL (col - 1) YEAR AS DATE)"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(YEAR, 3, col::DATE) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST(CAST(col AS DATE) + INTERVAL 3 YEAR AS DATE) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(YEAR, 3, col) as D", read="snowflake")
+        .transform(dateadd_date_cast)
+        .sql(dialect="duckdb")
+        == "SELECT col + INTERVAL 3 YEAR AS D"
+    )
+
+
+def test_dateadd_string_literal_timestamp_cast() -> None:
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(DAY, 3, '2023-03-03') as D", read="snowflake")
+        .transform(dateadd_string_literal_timestamp_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST('2023-03-03' AS TIMESTAMP) + INTERVAL 3 DAY AS D"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEADD(MONTH, 3, '2023-03-03') as D", read="snowflake")
+        .transform(dateadd_string_literal_timestamp_cast)
+        .sql(dialect="duckdb")
+        == "SELECT CAST('2023-03-03' AS TIMESTAMP) + INTERVAL 3 MONTH AS D"
+    )
+
+
+def test_datediff_string_literal_timestamp_cast() -> None:
+    assert (
+        sqlglot.parse_one("SELECT DATEDIFF(DAY, somecolumn, '2023-04-02') AS D", read="snowflake")
+        .transform(datediff_string_literal_timestamp_cast)
+        .sql(dialect="duckdb")
+        == "SELECT DATE_DIFF('DAY', somecolumn, CAST('2023-04-02' AS TIMESTAMP)) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEDIFF(HOUR, '2023-04-02', somecolumn) AS D", read="snowflake")
+        .transform(datediff_string_literal_timestamp_cast)
+        .sql(dialect="duckdb")
+        == "SELECT DATE_DIFF('HOUR', CAST('2023-04-02' AS TIMESTAMP), somecolumn) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEDIFF(week, '2023-04-02', '2023-03-02') AS D", read="snowflake")
+        .transform(datediff_string_literal_timestamp_cast)
+        .sql(dialect="duckdb")
+        == "SELECT DATE_DIFF('WEEK', CAST('2023-04-02' AS TIMESTAMP), CAST('2023-03-02' AS TIMESTAMP)) AS D"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT DATEDIFF(minute, c1, c2) AS D", read="duckdb")
+        .transform(datediff_string_literal_timestamp_cast)
+        .sql(dialect="duckdb")
+        == "SELECT DATE_DIFF('MINUTE', c1, c2) AS D"
+    )
+
+
 def test_extract_comment_on_columns() -> None:
     e = sqlglot.parse_one("ALTER TABLE ingredients ALTER amount COMMENT 'tablespoons'").transform(
         extract_comment_on_columns
@@ -153,6 +334,25 @@ def test_extract_text_length() -> None:
     e = sqlglot.parse_one(sql).transform(extract_text_length)
     assert e.sql() == sql
     assert e.args["text_lengths"] == [("t1", 16777216), ("t2", 10), ("t3", 20)]
+
+    sql = "ALTER TABLE t1 ALTER COLUMN c4 SET DATA TYPE VARCHAR(50)"
+    e = sqlglot.parse_one(sql).transform(extract_text_length)
+    assert e.sql() == sql
+    assert e.args["text_lengths"] == [("c4", 50)]
+
+    # test column name is correct with alias
+    sql = """CREATE TABLE table1 AS (
+                SELECT CAST(C1 AS TEXT) AS K, CAST(C2 AS TEXT(10)) AS V
+                FROM (VALUES (1, 2)) AS T(C1, C2))"""
+    e = sqlglot.parse_one(sql).transform(extract_text_length)
+    assert e.args["text_lengths"] == [("K", 16777216), ("V", 10)]
+
+    # test ctas column name is correct for combined field
+    sql = """CREATE TABLE SOME_TABLE AS (
+                SELECT CAST(C1 AS TEXT) || '-' || CAST(C1 AS TEXT) AS K
+                FROM VALUES (1), (2) AS T (C1))"""
+    e = sqlglot.parse_one(sql).transform(extract_text_length)
+    assert e.args["text_lengths"] == [("K", 16777216)]
 
 
 def test_flatten() -> None:
@@ -266,6 +466,16 @@ def test_json_extract_cast_as_varchar() -> None:
         == """SELECT JSON('{"fruit":"banana"}') ->> '$.fruit'"""
     )
 
+    assert (
+        sqlglot.parse_one(
+            """select parse_json('{"fruit":"9000"}'):fruit::number""",
+            read="snowflake",
+        )
+        .transform(json_extract_cast_as_varchar)
+        .sql(dialect="duckdb")
+        == """SELECT CAST(JSON('{"fruit":"9000"}') -> '$.fruit' AS DECIMAL)"""
+    )
+
 
 def test_json_extract_precedence() -> None:
     assert (
@@ -288,6 +498,16 @@ def test_object_construct() -> None:
         .transform(object_construct)
         .sql(dialect="duckdb")
         == "SELECT TO_JSON({'a': 1, 'b': 'BBBB', 'd': JSON('NULL')})"
+    )
+
+    assert (
+        sqlglot.parse_one(
+            "SELECT OBJECT_CONSTRUCT( 'k1', 'v1', 'k2', CASE WHEN ZEROIFNULL(col) + 1 >= 2 THEN 'v2' ELSE NULL END, 'k3', 'v3')",  # noqa: E501
+            read="snowflake",
+        )
+        .transform(object_construct)
+        .sql(dialect="duckdb")
+        == "SELECT TO_JSON({'k1': 'v1', 'k2': CASE WHEN CASE WHEN col IS NULL THEN 0 ELSE col END + 1 >= 2 THEN 'v2' ELSE NULL END, 'k3': 'v3'})"  # noqa: E501
     )
 
 
@@ -386,8 +606,15 @@ def test_to_date() -> None:
 
 def test_to_decimal() -> None:
     assert (
-        sqlglot.parse_one("SELECT to_decimal('1.245',10,2)").transform(to_decimal).sql()
+        sqlglot.parse_one("SELECT to_decimal('1.245',10,2)", read="snowflake").transform(to_decimal).sql()
         == "SELECT CAST('1.245' AS DECIMAL(10, 2))"
+    )
+
+
+def test_try_to_decimal() -> None:
+    assert (
+        sqlglot.parse_one("SELECT try_to_decimal('1.245',10,2)", read="snowflake").transform(try_to_decimal).sql()
+        == "SELECT TRY_CAST('1.245' AS DECIMAL(10, 2))"
     )
 
 
@@ -570,6 +797,23 @@ def test_try_parse_json() -> None:
         .transform(try_parse_json)
         .sql(dialect="duckdb")
         == """INSERT INTO table1 (name) SELECT TRY_CAST('{"first":"foo", "last":"bar"}' AS JSON)"""
+    )
+
+
+def test_trim_cast_varchar() -> None:
+    assert (
+        sqlglot.parse_one("SELECT TRIM(col) FROM table1").transform(trim_cast_varchar).sql(dialect="duckdb")
+        == "SELECT TRIM(CAST(col AS TEXT)) FROM table1"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT TRIM(col::varchar) FROM table1").transform(trim_cast_varchar).sql(dialect="duckdb")
+        == "SELECT TRIM(CAST(col AS TEXT)) FROM table1"
+    )
+
+    assert (
+        sqlglot.parse_one("SELECT TRIM(col::TEXT) FROM table1").transform(trim_cast_varchar).sql(dialect="duckdb")
+        == "SELECT TRIM(CAST(col AS TEXT)) FROM table1"
     )
 
 

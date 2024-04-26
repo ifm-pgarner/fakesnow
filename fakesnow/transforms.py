@@ -169,6 +169,98 @@ def drop_schema_cascade(expression: exp.Expression) -> exp.Expression:
     return new
 
 
+def dateadd_date_cast(expression: exp.Expression) -> exp.Expression:
+    """Cast result of DATEADD to DATE if the given expression is a cast to DATE
+       and unit is either DAY, WEEK, MONTH or YEAR to mimic Snowflake's DATEADD
+       behaviour.
+
+    Snowflake;
+        SELECT DATEADD(DAY, 3, '2023-03-03'::DATE) as D;
+            D: 2023-03-06 (DATE)
+    DuckDB;
+        SELECT CAST('2023-03-03' AS DATE) + INTERVAL 3 DAY AS D
+            D: 2023-03-06 00:00:00 (TIMESTAMP)
+    """
+
+    if not isinstance(expression, exp.DateAdd):
+        return expression
+
+    if expression.unit is None:
+        return expression
+
+    if not isinstance(expression.unit.this, str):
+        return expression
+
+    if (unit := expression.unit.this.upper()) and unit.upper() not in {"DAY", "WEEK", "MONTH", "YEAR"}:
+        return expression
+
+    if not isinstance(expression.this, exp.Cast):
+        return expression
+
+    if expression.this.to.this != exp.DataType.Type.DATE:
+        return expression
+
+    return exp.Cast(
+        this=expression,
+        to=exp.DataType(this=exp.DataType.Type.DATE, nested=False, prefix=False),
+    )
+
+
+def dateadd_string_literal_timestamp_cast(expression: exp.Expression) -> exp.Expression:
+    """Snowflake's DATEADD function implicitly casts string literals to
+    timestamps regardless of unit.
+    """
+    if not isinstance(expression, exp.DateAdd):
+        return expression
+
+    if not isinstance(expression.this, exp.Literal) or not expression.this.is_string:
+        return expression
+
+    new_dateadd = expression.copy()
+    new_dateadd.set(
+        "this",
+        exp.Cast(
+            this=expression.this,
+            # TODO: support TIMESTAMP_TYPE_MAPPING of TIMESTAMP_LTZ/TZ
+            to=exp.DataType(this=exp.DataType.Type.TIMESTAMP, nested=False, prefix=False),
+        ),
+    )
+
+    return new_dateadd
+
+
+def datediff_string_literal_timestamp_cast(expression: exp.Expression) -> exp.Expression:
+    """Snowflake's DATEDIFF function implicitly casts string literals to
+    timestamps regardless of unit.
+    """
+
+    if not isinstance(expression, exp.DateDiff):
+        return expression
+
+    op1 = expression.this.copy()
+    op2 = expression.expression.copy()
+
+    if isinstance(op1, exp.Literal) and op1.is_string:
+        op1 = exp.Cast(
+            this=op1,
+            # TODO: support TIMESTAMP_TYPE_MAPPING of TIMESTAMP_LTZ/TZ
+            to=exp.DataType(this=exp.DataType.Type.TIMESTAMP, nested=False, prefix=False),
+        )
+
+    if isinstance(op2, exp.Literal) and op2.is_string:
+        op2 = exp.Cast(
+            this=op2,
+            # TODO: support TIMESTAMP_TYPE_MAPPING of TIMESTAMP_LTZ/TZ
+            to=exp.DataType(this=exp.DataType.Type.TIMESTAMP, nested=False, prefix=False),
+        )
+
+    new_datediff = expression.copy()
+    new_datediff.set("this", op1)
+    new_datediff.set("expression", op2)
+
+    return new_datediff
+
+
 def extract_comment_on_columns(expression: exp.Expression) -> exp.Expression:
     """Extract column comments, removing it from the Expression.
 
@@ -268,10 +360,19 @@ def extract_text_length(expression: exp.Expression) -> exp.Expression:
 
     if isinstance(expression, (exp.Create, exp.AlterTable)):
         text_lengths = []
-        for dt in expression.find_all(exp.DataType):
-            if dt.this in (exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT):
-                col_name = dt.parent and dt.parent.this and dt.parent.this.this
-                if dt_size := dt.find(exp.DataTypeParam):
+
+        # exp.Select is for a ctas, exp.Schema is a plain definition
+        if cols := expression.find(exp.Select, exp.Schema):
+            expressions = cols.expressions
+        else:
+            # alter table
+            expressions = expression.args.get("actions") or []
+        for e in expressions:
+            if dts := [
+                dt for dt in e.find_all(exp.DataType) if dt.this in (exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT)
+            ]:
+                col_name = e.alias if isinstance(e, exp.Alias) else e.name
+                if len(dts) == 1 and (dt_size := dts[0].find(exp.DataTypeParam)):
                     size = (
                         isinstance(dt_size.this, exp.Literal)
                         and isinstance(dt_size.this.this, str)
@@ -474,6 +575,9 @@ def json_extract_cast_as_varchar(expression: exp.Expression) -> exp.Expression:
     """
     if (
         isinstance(expression, exp.Cast)
+        and (to := expression.to)
+        and isinstance(to, exp.DataType)
+        and to.this in {exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT}
         and (je := expression.this)
         and isinstance(je, exp.JSONExtract)
         and (path := je.expression)
@@ -488,7 +592,7 @@ def json_extract_precedence(expression: exp.Expression) -> exp.Expression:
 
     See https://github.com/tekumara/fakesnow/issues/53
     """
-    if isinstance(expression, exp.JSONExtract):
+    if isinstance(expression, (exp.JSONExtract, exp.JSONExtractScalar)):
         return exp.Paren(this=expression)
     return expression
 
@@ -541,12 +645,26 @@ def object_construct(expression: exp.Expression) -> exp.Expression:
     """
 
     if isinstance(expression, exp.Struct):
-        # remove expressions containing NULL
-        for enull in expression.find_all(exp.Null):
-            if enull.parent:
-                enull.parent.pop()
+        non_null_expressions = []
+        for e in expression.expressions:
+            if not (isinstance(e, exp.PropertyEQ)):
+                non_null_expressions.append(e)
+                continue
 
-        return exp.Anonymous(this="TO_JSON", expressions=[expression])
+            left = e.left
+            right = e.right
+
+            left_is_null = isinstance(left, exp.Null)
+            right_is_null = isinstance(right, exp.Null)
+
+            if left_is_null or right_is_null:
+                continue
+
+            non_null_expressions.append(e)
+
+        new_struct = expression.copy()
+        new_struct.set("expressions", non_null_expressions)
+        return exp.Anonymous(this="TO_JSON", expressions=[new_struct])
 
     return expression
 
@@ -673,7 +791,10 @@ def set_schema(expression: exp.Expression, current_database: str | None) -> exp.
 
         if kind.name.upper() == "DATABASE":
             # duckdb's default schema is main
-            name = f"{expression.this.name}.main"
+            database = expression.this.name
+            return exp.Command(
+                this="SET", expression=exp.Literal.string(f"schema = '{database}.main'"), set_database=database
+            )
         else:
             # SCHEMA
             if db := expression.this.args.get("db"):  # noqa: SIM108
@@ -682,9 +803,10 @@ def set_schema(expression: exp.Expression, current_database: str | None) -> exp.
                 # isn't qualified with a database
                 db_name = current_database or MISSING_DATABASE
 
-            name = f"{db_name}.{expression.this.name}"
-
-        return exp.Command(this="SET", expression=exp.Literal.string(f"schema = '{name}'"))
+            schema = expression.this.name
+            return exp.Command(
+                this="SET", expression=exp.Literal.string(f"schema = '{db_name}.{schema}'"), set_schema=schema
+            )
 
     return expression
 
@@ -879,6 +1001,22 @@ def _get_to_number_args(e: exp.ToNumber) -> tuple[exp.Expression | None, exp.Exp
     return _format, _precision, _scale
 
 
+def _to_decimal(expression: exp.Expression, cast_node: type[exp.Cast]) -> exp.Expression:
+    expressions: list[exp.Expression] = expression.expressions
+
+    if len(expressions) > 1 and expressions[1].is_string:
+        # see https://docs.snowflake.com/en/sql-reference/functions/to_decimal#arguments
+        raise NotImplementedError(f"{expression.this} with format argument")
+
+    precision = expressions[1] if len(expressions) > 1 else exp.Literal(this="38", is_string=False)
+    scale = expressions[2] if len(expressions) > 2 else exp.Literal(this="0", is_string=False)
+
+    return cast_node(
+        this=expressions[0],
+        to=exp.DataType(this=exp.DataType.Type.DECIMAL, expressions=[precision, scale], nested=False, prefix=False),
+    )
+
+
 def to_decimal(expression: exp.Expression) -> exp.Expression:
     """Transform to_decimal, to_number, to_numeric expressions from snowflake to duckdb.
 
@@ -905,19 +1043,22 @@ def to_decimal(expression: exp.Expression) -> exp.Expression:
         and isinstance(expression.this, str)
         and expression.this.upper() in ["TO_DECIMAL", "TO_NUMERIC"]
     ):
-        expressions: list[exp.Expression] = expression.expressions
+        return _to_decimal(expression, exp.Cast)
 
-        if len(expressions) > 1 and expressions[1].is_string:
-            # see https://docs.snowflake.com/en/sql-reference/functions/to_decimal#arguments
-            raise NotImplementedError(f"{expression.this} with format argument")
+    return expression
 
-        precision = expressions[1] if len(expressions) > 1 else exp.Literal(this="38", is_string=False)
-        scale = expressions[2] if len(expressions) > 2 else exp.Literal(this="0", is_string=False)
 
-        return exp.Cast(
-            this=expressions[0],
-            to=exp.DataType(this=exp.DataType.Type.DECIMAL, expressions=[precision, scale], nested=False, prefix=False),
-        )
+def try_to_decimal(expression: exp.Expression) -> exp.Expression:
+    """Transform try_to_decimal, try_to_number, try_to_numeric expressions from snowflake to duckdb.
+    See https://docs.snowflake.com/en/sql-reference/functions/try_to_decimal
+    """
+
+    if (
+        isinstance(expression, exp.Anonymous)
+        and isinstance(expression.this, str)
+        and expression.this.upper() in ["TRY_TO_DECIMAL", "TRY_TO_NUMBER", "TRY_TO_NUMERIC"]
+    ):
+        return _to_decimal(expression, exp.TryCast)
 
     return expression
 
@@ -968,6 +1109,21 @@ def timestamp_ntz_ns(expression: exp.Expression) -> exp.Expression:
         return new
 
     return expression
+
+
+def trim_cast_varchar(expression: exp.Expression) -> exp.Expression:
+    """Snowflake's TRIM casts input to VARCHAR implicitly."""
+
+    if not (isinstance(expression, exp.Trim)):
+        return expression
+
+    operand = expression.this
+    if isinstance(operand, exp.Cast) and operand.to.this in [exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT]:
+        return expression
+
+    return exp.Trim(
+        this=exp.Cast(this=operand, to=exp.DataType(this=exp.DataType.Type.VARCHAR, nested=False, prefix=False))
+    )
 
 
 def try_parse_json(expression: exp.Expression) -> exp.Expression:

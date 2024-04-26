@@ -11,6 +11,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 import duckdb
+from sqlglot import exp
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -22,7 +23,7 @@ import sqlglot
 from duckdb import DuckDBPyConnection
 from snowflake.connector.cursor import DictCursor, ResultMetadata, SnowflakeCursor
 from snowflake.connector.result_batch import ResultBatch
-from sqlglot import exp, parse_one
+from sqlglot import parse_one
 from typing_extensions import Self
 
 import fakesnow.checks as checks
@@ -112,7 +113,9 @@ class FakeSnowflakeCursor:
     def description(self) -> list[ResultMetadata]:
         # use a separate cursor to avoid consuming the result set on this cursor
         with self._conn.cursor() as cur:
-            cur.execute(f"DESCRIBE {self._last_sql}", self._last_params)
+            # self._duck_conn.execute(sql, params)
+            expression = sqlglot.parse_one(f"DESCRIBE {self._last_sql}", read="duckdb")
+            cur._execute(expression, self._last_params)  # noqa: SLF001
             meta = FakeSnowflakeCursor._describe_as_result_metadata(cur.fetchall())
 
         return meta
@@ -126,28 +129,82 @@ class FakeSnowflakeCursor:
     ) -> FakeSnowflakeCursor:
         try:
             self._sqlstate = None
-            return self._execute(command, params, *args, **kwargs)
+
+            if os.environ.get("FAKESNOW_DEBUG") == "snowflake":
+                print(f"{command};{params=}" if params else f"{command};", file=sys.stderr)
+
+            command, params = self._rewrite_with_params(command, params)
+            expression = parse_one(command, read="snowflake")
+            transformed = self._transform(expression)
+            return self._execute(transformed, params)
         except snowflake.connector.errors.ProgrammingError as e:
             self._sqlstate = e.sqlstate
             raise e
 
+    def _transform(self, expression: exp.Expression) -> exp.Expression:
+        return (
+            expression.transform(transforms.upper_case_unquoted_identifiers)
+            .transform(transforms.set_schema, current_database=self._conn.database)
+            .transform(transforms.create_database, db_path=self._conn.db_path)
+            .transform(transforms.extract_comment_on_table)
+            .transform(transforms.extract_comment_on_columns)
+            .transform(transforms.information_schema_fs_columns_snowflake)
+            .transform(transforms.information_schema_fs_tables_ext)
+            .transform(transforms.drop_schema_cascade)
+            .transform(transforms.tag)
+            .transform(transforms.semi_structured_types)
+            .transform(transforms.try_parse_json)
+            # NOTE: trim_cast_varchar must be before json_extract_cast_as_varchar
+            .transform(transforms.trim_cast_varchar)
+            # indices_to_json_extract must be before regex_substr
+            .transform(transforms.indices_to_json_extract)
+            .transform(transforms.json_extract_cast_as_varchar)
+            .transform(transforms.json_extract_cased_as_varchar)
+            .transform(transforms.json_extract_precedence)
+            .transform(transforms.flatten)
+            .transform(transforms.regex_replace)
+            .transform(transforms.regex_substr)
+            .transform(transforms.values_columns)
+            .transform(transforms.to_date)
+            .transform(transforms.to_decimal)
+            .transform(transforms.try_to_decimal)
+            .transform(transforms.to_timestamp_ntz)
+            .transform(transforms.to_timestamp)
+            .transform(transforms.object_construct)
+            .transform(transforms.timestamp_ntz_ns)
+            .transform(transforms.float_to_double)
+            .transform(transforms.integer_precision)
+            .transform(transforms.extract_text_length)
+            .transform(transforms.sample)
+            .transform(transforms.array_size)
+            .transform(transforms.random)
+            .transform(transforms.identifier)
+            .transform(transforms.array_agg_within_group)
+            .transform(transforms.array_agg_to_json)
+            .transform(transforms.dateadd_date_cast)
+            .transform(transforms.dateadd_string_literal_timestamp_cast)
+            .transform(transforms.datediff_string_literal_timestamp_cast)
+            .transform(lambda e: transforms.show_schemas(e, self._conn.database))
+            .transform(lambda e: transforms.show_objects_tables(e, self._conn.database))
+            # TODO collapse into a single show_keys function
+            .transform(lambda e: transforms.show_keys(e, self._conn.database, kind="PRIMARY"))
+            .transform(lambda e: transforms.show_keys(e, self._conn.database, kind="UNIQUE"))
+            .transform(lambda e: transforms.show_keys(e, self._conn.database, kind="FOREIGN"))
+            .transform(transforms.show_users)
+            .transform(transforms.create_user)
+            .transform(transforms.sha256)
+        )
+
     def _execute(
-        self,
-        command: str,
-        params: Sequence[Any] | dict[Any, Any] | None = None,
-        *args: Any,
-        **kwargs: Any,
+        self, transformed: exp.Expression, params: Sequence[Any] | dict[Any, Any] | None = None
     ) -> FakeSnowflakeCursor:
         self._arrow_table = None
         self._arrow_table_fetch_index = None
         self._rowcount = None
 
-        command, params = self._rewrite_with_params(command, params)
-        expression = parse_one(command, read="snowflake")
+        cmd = expr.key_command(transformed)
 
-        cmd = expr.key_command(expression)
-
-        no_database, no_schema = checks.is_unqualified_table_expression(expression)
+        no_database, no_schema = checks.is_unqualified_table_expression(transformed)
 
         if no_database and not self._conn.database_set:
             raise snowflake.connector.errors.ProgrammingError(
@@ -162,61 +219,15 @@ class FakeSnowflakeCursor:
                 sqlstate="22000",
             )
 
-        transformed = (
-            expression.transform(transforms.upper_case_unquoted_identifiers)
-            .transform(transforms.set_schema, current_database=self._conn.database)
-            .transform(transforms.create_database, db_path=self._conn.db_path)
-            .transform(transforms.extract_comment_on_table)
-            .transform(transforms.extract_comment_on_columns)
-            .transform(transforms.information_schema_fs_columns_snowflake)
-            .transform(transforms.information_schema_fs_tables_ext)
-            .transform(transforms.drop_schema_cascade)
-            .transform(transforms.tag)
-            .transform(transforms.semi_structured_types)
-            .transform(transforms.try_parse_json)
-            # indices_to_json_extract must be before regex_substr
-            .transform(transforms.indices_to_json_extract)
-            .transform(transforms.json_extract_cast_as_varchar)
-            .transform(transforms.json_extract_cased_as_varchar)
-            .transform(transforms.json_extract_precedence)
-            .transform(transforms.flatten)
-            .transform(transforms.regex_replace)
-            .transform(transforms.regex_substr)
-            .transform(transforms.values_columns)
-            .transform(transforms.to_date)
-            .transform(transforms.to_decimal)
-            .transform(transforms.to_timestamp_ntz)
-            .transform(transforms.to_timestamp)
-            .transform(transforms.object_construct)
-            .transform(transforms.timestamp_ntz_ns)
-            .transform(transforms.float_to_double)
-            .transform(transforms.integer_precision)
-            .transform(transforms.extract_text_length)
-            .transform(transforms.sample)
-            .transform(transforms.array_size)
-            .transform(transforms.random)
-            .transform(transforms.identifier)
-            .transform(transforms.array_agg_within_group)
-            .transform(transforms.array_agg_to_json)
-            .transform(lambda e: transforms.show_schemas(e, self._conn.database))
-            .transform(lambda e: transforms.show_objects_tables(e, self._conn.database))
-            # TODO collapse into a single show_keys function
-            .transform(lambda e: transforms.show_keys(e, self._conn.database, kind="PRIMARY"))
-            .transform(lambda e: transforms.show_keys(e, self._conn.database, kind="UNIQUE"))
-            .transform(lambda e: transforms.show_keys(e, self._conn.database, kind="FOREIGN"))
-            .transform(transforms.show_users)
-            .transform(transforms.create_user)
-            .transform(transforms.sha256)
-        )
         sql = transformed.sql(dialect="duckdb")
-        result_sql = None
 
         if transformed.find(exp.Select) and (seed := transformed.args.get("seed")):
             sql = f"SELECT setseed({seed}); {sql}"
 
-        if fs_debug := os.environ.get("FAKESNOW_DEBUG"):
-            debug = command if fs_debug == "snowflake" else sql
-            print(f"{debug};{params=}" if params else f"{debug};", file=sys.stderr)
+        if (fs_debug := os.environ.get("FAKESNOW_DEBUG")) and fs_debug != "snowflake":
+            print(f"{sql};{params=}" if params else f"{sql};", file=sys.stderr)
+
+        result_sql = None
 
         try:
             self._duck_conn.execute(sql, params)
@@ -240,43 +251,18 @@ class FakeSnowflakeCursor:
 
         affected_count = None
 
-        if (maybe_ident := expression.find(exp.Identifier, bfs=False)) and isinstance(maybe_ident.this, str):
-            ident = maybe_ident.this if maybe_ident.quoted else maybe_ident.this.upper()
-        else:
-            ident = None
-
-        if cmd == "USE DATABASE" and ident:
-            self._conn.database = ident
+        if set_database := transformed.args.get("set_database"):
+            self._conn.database = set_database
             self._conn.database_set = True
 
-        elif cmd == "USE SCHEMA" and ident:
-            self._conn.schema = ident
+        elif set_schema := transformed.args.get("set_schema"):
+            self._conn.schema = set_schema
             self._conn.schema_set = True
 
         elif create_db_name := transformed.args.get("create_db_name"):
             # we created a new database, so create the info schema extensions
             self._duck_conn.execute(info_schema.creation_sql(create_db_name))
             result_sql = SQL_CREATED_DATABASE.substitute(name=create_db_name)
-
-        elif cmd == "CREATE SCHEMA" and ident:
-            result_sql = SQL_CREATED_SCHEMA.substitute(name=ident)
-
-        elif cmd == "CREATE TABLE" and ident:
-            result_sql = SQL_CREATED_TABLE.substitute(name=ident)
-
-        elif cmd == "CREATE VIEW" and ident:
-            result_sql = SQL_CREATED_VIEW.substitute(name=ident)
-
-        elif cmd.startswith("DROP") and ident:
-            result_sql = SQL_DROPPED.substitute(name=ident)
-
-            # if dropping the current database/schema then reset conn metadata
-            if cmd == "DROP DATABASE" and ident == self._conn.database:
-                self._conn.database = None
-                self._conn.schema = None
-
-            elif cmd == "DROP SCHEMA" and ident == self._conn.schema:
-                self._conn.schema = None
 
         elif cmd == "INSERT":
             (affected_count,) = self._duck_conn.fetchall()[0]
@@ -296,6 +282,28 @@ class FakeSnowflakeCursor:
             result_sql = transformed.transform(
                 lambda e: transforms.describe_table(e, self._conn.database, self._conn.schema)
             ).sql(dialect="duckdb")
+
+        elif (eid := transformed.find(exp.Identifier, bfs=False)) and isinstance(eid.this, str):
+            ident = eid.this if eid.quoted else eid.this.upper()
+            if cmd == "CREATE SCHEMA" and ident:
+                result_sql = SQL_CREATED_SCHEMA.substitute(name=ident)
+
+            elif cmd == "CREATE TABLE" and ident:
+                result_sql = SQL_CREATED_TABLE.substitute(name=ident)
+
+            elif cmd == "CREATE VIEW" and ident:
+                result_sql = SQL_CREATED_VIEW.substitute(name=ident)
+
+            elif cmd.startswith("DROP") and ident:
+                result_sql = SQL_DROPPED.substitute(name=ident)
+
+                # if dropping the current database/schema then reset conn metadata
+                if cmd == "DROP DATABASE" and ident == self._conn.database:
+                    self._conn.database = None
+                    self._conn.schema = None
+
+                elif cmd == "DROP SCHEMA" and ident == self._conn.schema:
+                    self._conn.schema = None
 
         if table_comment := cast(tuple[exp.Table, str], transformed.args.get("table_comment")):
             # record table comment

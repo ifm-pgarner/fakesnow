@@ -290,6 +290,91 @@ def test_connect_with_non_existent_db_or_schema(_fakesnow_no_auto_create: None):
         assert conn.schema == "JAFFLES"
 
 
+def test_dateadd_date_cast(dcur: snowflake.connector.DictCursor):
+    q = """
+    SELECT
+        dateadd(hour, 1, '2023-04-02'::date) as d_noop,
+        dateadd(day, 1, '2023-04-02'::date) as d_day,
+        dateadd(week, 1, '2023-04-02'::date) as d_week,
+        dateadd(month, 1, '2023-04-02'::date) as d_month,
+        dateadd(year, 1, '2023-04-02'::date) as d_year
+    """
+
+    dcur.execute(q)
+    assert dcur.fetchall() == [
+        {
+            "D_NOOP": datetime.datetime(2023, 4, 2, 1, 0),
+            "D_DAY": datetime.date(2023, 4, 3),
+            "D_WEEK": datetime.date(2023, 4, 9),
+            "D_MONTH": datetime.date(2023, 5, 2),
+            "D_YEAR": datetime.date(2024, 4, 2),
+        }
+    ]
+
+
+def test_dateadd_string_literal_timestamp_cast(dcur: snowflake.connector.cursor.DictCursor):
+    q = """
+    SELECT
+        DATEADD('MINUTE', 3, '2023-04-02') AS D_MINUTE,
+        DATEADD('HOUR', 3, '2023-04-02') AS D_HOUR,
+        DATEADD('DAY', 3, '2023-04-02') AS D_DAY,
+        DATEADD('WEEK', 3, '2023-04-02') AS D_WEEK,
+        DATEADD('MONTH', 3, '2023-04-02') AS D_MONTH,
+        DATEADD('YEAR', 3, '2023-04-02') AS D_YEAR
+    ;
+    """
+    dcur.execute(q)
+
+    assert dcur.fetchall() == [
+        {
+            "D_MINUTE": datetime.datetime(2023, 4, 2, 0, 3),
+            "D_HOUR": datetime.datetime(2023, 4, 2, 3, 0),
+            "D_DAY": datetime.datetime(2023, 4, 5, 0, 0),
+            "D_WEEK": datetime.datetime(2023, 4, 23, 0, 0),
+            "D_MONTH": datetime.datetime(2023, 7, 2, 0, 0),
+            "D_YEAR": datetime.datetime(2026, 4, 2, 0, 0),
+        }
+    ]
+
+    q = """
+    SELECT
+        DATEADD('MINUTE', 3, '2023-04-02 01:15:00') AS DT_MINUTE,
+        DATEADD('HOUR', 3, '2023-04-02 01:15:00') AS DT_HOUR,
+        DATEADD('DAY', 3, '2023-04-02 01:15:00') AS DT_DAY,
+        DATEADD('WEEK', 3, '2023-04-02 01:15:00') AS DT_WEEK,
+        DATEADD('MONTH', 3, '2023-04-02 01:15:00') AS DT_MONTH,
+        DATEADD('YEAR', 3, '2023-04-02 01:15:00') AS DT_YEAR
+    ;
+    """
+    dcur.execute(q)
+
+    assert dcur.fetchall() == [
+        {
+            "DT_MINUTE": datetime.datetime(2023, 4, 2, 1, 18),
+            "DT_HOUR": datetime.datetime(2023, 4, 2, 4, 15),
+            "DT_DAY": datetime.datetime(2023, 4, 5, 1, 15),
+            "DT_WEEK": datetime.datetime(2023, 4, 23, 1, 15),
+            "DT_MONTH": datetime.datetime(2023, 7, 2, 1, 15),
+            "DT_YEAR": datetime.datetime(2026, 4, 2, 1, 15),
+        }
+    ]
+
+
+def test_datediff_string_literal_timestamp_cast(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("SELECT DATEDIFF(DAY, '2023-04-02', '2023-03-02') AS D")
+    assert cur.fetchall() == [(-31,)]
+
+    cur.execute("SELECT DATEDIFF(HOUR, '2023-04-02', '2023-03-02') AS D")
+    assert cur.fetchall() == [(-744,)]
+
+    cur.execute("SELECT DATEDIFF(week, '2023-04-02', '2023-03-02') AS D")
+    assert cur.fetchall() == [(-4,)]
+
+    # noop
+    cur.execute("select '2023-04-02'::timestamp as c1, '2023-03-02'::timestamp as c2, DATEDIFF(minute, c1, c2) AS D")
+    assert cur.fetchall() == [(datetime.datetime(2023, 4, 2, 0, 0), datetime.datetime(2023, 3, 2, 0, 0), -44640)]
+
+
 def test_current_database_schema(conn: snowflake.connector.SnowflakeConnection):
     with conn.cursor(snowflake.connector.cursor.DictCursor) as cur:
         cur.execute("select current_database(), current_schema()")
@@ -527,6 +612,17 @@ def test_description_delete(dcur: snowflake.connector.cursor.DictCursor):
     # fmt: on
 
 
+def test_description_select(dcur: snowflake.connector.cursor.DictCursor):
+    dcur.execute("SELECT DATEDIFF( DAY, '2023-04-02'::DATE, '2023-04-05'::DATE) as days")
+    assert dcur.fetchall() == [{"DAYS": 3}]
+    # TODO: Snowflake is actually precision=9, is_nullable=False
+    # fmt: off
+    assert dcur.description == [
+        ResultMetadata(name='DAYS', type_code=0, display_size=None, internal_size=None, precision=38, scale=0, is_nullable=True),
+    ]
+    # fmt: on
+
+
 def test_equal_null(cur: snowflake.connector.cursor.SnowflakeCursor):
     cur.execute("select equal_null(NULL, NULL), equal_null(1, 1), equal_null(1, 2), equal_null(1, NULL)")
     assert cur.fetchall() == [(True, True, False, False)]
@@ -707,6 +803,11 @@ def test_get_path_precedence(cur: snowflake.connector.cursor.SnowflakeCursor):
     cur.execute("select {'K1': {'K2': 1}} as col where col:K1:K2 > 0")
     assert indent(cur.fetchall()) == [('{\n  "K1": {\n    "K2": 1\n  }\n}',)]
 
+    cur.execute(
+        """select parse_json('{"K1": "a", "K2": "b"}') as col, case when col:K1::VARCHAR = 'a' and col:K2::VARCHAR = 'b' then 'yes' end"""
+    )
+    assert indent(cur.fetchall()) == [('{\n  "K1": "a",\n  "K2": "b"\n}', "yes")]
+
 
 def test_get_result_batches(cur: snowflake.connector.cursor.SnowflakeCursor):
     # no result set
@@ -765,16 +866,44 @@ def test_non_existent_table_throws_snowflake_exception(cur: snowflake.connector.
         cur.execute("select * from this_table_does_not_exist")
 
 
-def test_object_construct(cur: snowflake.connector.cursor.SnowflakeCursor):
-    cur.execute("SELECT OBJECT_CONSTRUCT('a',1,'b','BBBB', 'c',null)")
+def test_object_construct(conn: snowflake.connector.SnowflakeConnection):
+    with conn.cursor() as cur:
+        cur.execute("SELECT OBJECT_CONSTRUCT('a',1,'b','BBBB', 'c',null)")
 
-    # TODO: strip null within duckdb via python UDF
-    def strip_none_values(d: dict) -> dict:
-        return {k: v for k, v in d.items() if v}
+        # TODO: strip null within duckdb via python UDF
+        def strip_none_values(d: dict) -> dict:
+            return {k: v for k, v in d.items() if v}
 
-    result = cur.fetchone()
-    assert isinstance(result, tuple)
-    assert strip_none_values(json.loads(result[0])) == json.loads('{\n  "a": 1,\n  "b": "BBBB"\n}')
+        result = cur.fetchone()
+        assert isinstance(result, tuple)
+        assert strip_none_values(json.loads(result[0])) == json.loads('{\n  "a": 1,\n  "b": "BBBB"\n}')
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT OBJECT_CONSTRUCT('a', 1, null, 'nulkeyed') as col")
+
+        result = cur.fetchone()
+        assert isinstance(result, tuple)
+        assert strip_none_values(json.loads(result[0])) == json.loads('{\n  "a": 1\n}')
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT NULL as col, OBJECT_CONSTRUCT( 'k1', 'v1', 'k2', CASE WHEN ZEROIFNULL(col) + 1 >= 2 THEN 'v2' ELSE NULL END, 'k3', 'v3')"
+        )
+
+        result = cur.fetchone()
+        assert isinstance(result, tuple)
+        assert strip_none_values(json.loads(result[1])) == json.loads('{\n  "k1": "v1",\n  "k3": "v3"\n}')
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 as col, OBJECT_CONSTRUCT( 'k1', 'v1', 'k2', CASE WHEN ZEROIFNULL(col) + 1 >= 2 THEN 'v2' ELSE NULL END, 'k3', 'v3')"
+        )
+
+        result = cur.fetchone()
+        assert isinstance(result, tuple)
+        assert strip_none_values(json.loads(result[1])) == json.loads(
+            '{\n  "k1": "v1",\n  "k2": "v2",\n  "k3": "v3"\n}'
+        )
 
 
 def test_percentile_cont(conn: snowflake.connector.SnowflakeConnection):
@@ -1226,6 +1355,20 @@ def test_try_parse_json(dcur: snowflake.connector.cursor.DictCursor):
     assert dcur.fetchall() == [{"J": None}]
 
 
+def test_try_to_decimal(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute(
+        "SELECT column1 AS orig_string, TRY_TO_DECIMAL(column1) AS dec, TRY_TO_DECIMAL(column1, 10, 2) AS dec_with_scale, TRY_TO_DECIMAL(column1, 4, 2) AS dec_with_range_err FROM VALUES ('345.123');"
+    )
+    assert cur.fetchall() == [
+        (
+            "345.123",
+            Decimal("345"),
+            Decimal("345.12"),
+            None,
+        ),
+    ]
+
+
 def test_transactions(conn: snowflake.connector.SnowflakeConnection):
     # test behaviours required for sqlalchemy
 
@@ -1264,6 +1407,14 @@ def test_transactions(conn: snowflake.connector.SnowflakeConnection):
         cur.execute("ROLLBACK")
         assert cur.description == [ResultMetadata(name='status', type_code=2, display_size=None, internal_size=16777216, precision=None, scale=None, is_nullable=True)]  # fmt: skip
         assert cur.fetchall() == [("Statement executed successfully.",)]
+
+
+def test_trim_cast_varchar(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("select trim(1), trim('  name 1  ')")
+    assert cur.fetchall() == [("1", "name 1")]
+
+    cur.execute("""select trim(parse_json('{"k1": "   v11  "}'):k1), trim(parse_json('{"k1": 21}'):k1)""")
+    assert cur.fetchall() == [("v11", "21")]
 
 
 def test_unquoted_identifiers_are_upper_cased(dcur: snowflake.connector.cursor.SnowflakeCursor):
@@ -1321,6 +1472,17 @@ def test_values(conn: snowflake.connector.SnowflakeConnection):
             {"COLUMN2": 1, "COLUMN1": "Amsterdam", "PJ": "[]"},
             {"COLUMN2": 2, "COLUMN1": "London", "PJ": "{}"},
         ]
+
+
+def test_json_extract_cast_as_varchar(dcur: snowflake.connector.cursor.DictCursor):
+    dcur.execute("CREATE TABLE example (j VARIANT)")
+    dcur.execute("""INSERT INTO example SELECT PARSE_JSON('{"str": "100", "number" : 100}')""")
+
+    dcur.execute("SELECT j:str::varchar as c_str_varchar, j:number::varchar as c_num_varchar  FROM example")
+    assert dcur.fetchall() == [{"C_STR_VARCHAR": "100", "C_NUM_VARCHAR": "100"}]
+
+    dcur.execute("SELECT j:str::number as c_str_number, j:number::number as c_num_number  FROM example")
+    assert dcur.fetchall() == [{"C_STR_NUMBER": 100, "C_NUM_NUMBER": 100}]
 
 
 def test_write_pandas_quoted_column_names(conn: snowflake.connector.SnowflakeConnection):

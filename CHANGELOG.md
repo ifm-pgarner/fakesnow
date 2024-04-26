@@ -2,6 +2,43 @@
 
 # Changelog
 
+## [0.9.8](https://github.com/tekumara/fakesnow/compare/v0.9.7...v0.9.8) (2024-04-19)
+
+
+### Features
+
+* support trim with numeric and variant types ([#69](https://github.com/tekumara/fakesnow/issues/69)) ([00ab619](https://github.com/tekumara/fakesnow/commit/00ab619985e50624c047a704aa85060ad7938407))
+
+
+### Bug Fixes
+
+* don't double transform cur.description sql ([76551ef](https://github.com/tekumara/fakesnow/commit/76551efabc94444de4a755fa78b58a0e2fd95c14)), closes [#61](https://github.com/tekumara/fakesnow/issues/61)
+* GET_PATH precedence for JSONExtractScalar ([#78](https://github.com/tekumara/fakesnow/issues/78)) ([8a888a1](https://github.com/tekumara/fakesnow/commit/8a888a1f2b048afa7201679bf03e9689bffa4caa))
+* **json extraction:** only return string when casting to varchar ([#77](https://github.com/tekumara/fakesnow/issues/77)) ([173344e](https://github.com/tekumara/fakesnow/commit/173344ec4b6358aab49fc227372edd494da1a9fc))
+
+## [0.9.7](https://github.com/tekumara/fakesnow/compare/v0.9.6...v0.9.7) (2024-04-08)
+
+
+### Features
+
+* add TRY_PARSE_JSON ([#67](https://github.com/tekumara/fakesnow/issues/67)) ([5ebf0ba](https://github.com/tekumara/fakesnow/commit/5ebf0ba3e0fba4462862374135ee4ca4820af492))
+* add TRY_TO_{DECIMAL,...} ([#68](https://github.com/tekumara/fakesnow/issues/68)) ([5903af6](https://github.com/tekumara/fakesnow/commit/5903af6aa8b3235796e669246893521f3bcff698))
+* cast string literals to timestamp in dateadd ([#72](https://github.com/tekumara/fakesnow/issues/72)) ([5af0a36](https://github.com/tekumara/fakesnow/commit/5af0a3676b9c3875eb9062a9fffe2a4364dc1a4e))
+* cast string literals to timestamp in datediff ([#79](https://github.com/tekumara/fakesnow/issues/79)) ([c8d7b26](https://github.com/tekumara/fakesnow/commit/c8d7b26ef960be10eca506aa86c3fd4be7b87a7a))
+* mimic dateadd with date + day/week/month/year ([#71](https://github.com/tekumara/fakesnow/issues/71)) ([6a8ebe2](https://github.com/tekumara/fakesnow/commit/6a8ebe2a03a9ae0a83ef49568e7a94abb14da5fc))
+* support sha2 and sha2_hex with digest size of 256 ([#63](https://github.com/tekumara/fakesnow/issues/63)) ([ce345e9](https://github.com/tekumara/fakesnow/commit/ce345e9bbda17579049d60339734024bcac1d99b))
+
+
+### Bug Fixes
+
+* remove only null key/values in object_construct ([#74](https://github.com/tekumara/fakesnow/issues/74)) ([d09edb6](https://github.com/tekumara/fakesnow/commit/d09edb63a9fcfa4d0d4b3dfac663d3ec75a0965c))
+* write_pandas quotes columns when inserting dataframe ([#65](https://github.com/tekumara/fakesnow/issues/65)) ([f62ab03](https://github.com/tekumara/fakesnow/commit/f62ab034204bbe029962f60938736bbf53fea73b))
+
+
+### Chores
+
+* **deps:** bump sqlglot to 23.3.0 ([#75](https://github.com/tekumara/fakesnow/issues/75)) ([9dce794](https://github.com/tekumara/fakesnow/commit/9dce794c7df0ca714344b6a242b7bc071d84a4f9))
+
 ## [0.9.6](https://github.com/tekumara/fakesnow/compare/v0.9.5...v0.9.6) (2024-03-24)
 
 
