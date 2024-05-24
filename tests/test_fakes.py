@@ -5,9 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import tempfile
-from collections.abc import Sequence
 from decimal import Decimal
-from typing import cast
 
 import pandas as pd
 import pytest
@@ -19,6 +17,7 @@ from pandas.testing import assert_frame_equal
 from snowflake.connector.cursor import ResultMetadata
 
 import fakesnow
+from tests.utils import dindent, indent
 
 
 def test_alter_table(cur: snowflake.connector.cursor.SnowflakeCursor):
@@ -108,6 +107,16 @@ def test_binding_qmark(_fakesnow: None):
         # this has no effect after connection created, so qmark style still works
         snowflake.connector.paramstyle = "pyformat"
         cur.execute("select * from customers where id = ?", (1,))
+
+
+def test_clone(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table customers (ID int, FIRST_NAME varchar, ACTIVE boolean)")
+    cur.execute("insert into customers values (1, 'Jenny', True)")
+
+    cur.execute("create table customers2 clone db1.schema1.customers")
+    cur.execute("select * from customers2")
+    # TODO check tags are copied too
+    assert cur.fetchall() == [(1, "Jenny", True)]
 
 
 def test_close_conn(conn: snowflake.connector.SnowflakeConnection, cur: snowflake.connector.cursor.SnowflakeCursor):
@@ -861,6 +870,12 @@ def test_identifier(cur: snowflake.connector.cursor.SnowflakeCursor):
     assert cur.fetchall() == [(1,)]
 
 
+def test_nop_regexes():
+    with fakesnow.patch(nop_regexes=["^CALL.*"]), snowflake.connector.connect() as conn, conn.cursor() as cur:
+        cur.execute("call this_procedure_does_not_exist('foo', 'bar);")
+        assert cur.fetchall() == [("Statement executed successfully.",)]
+
+
 def test_non_existent_table_throws_snowflake_exception(cur: snowflake.connector.cursor.SnowflakeCursor):
     with pytest.raises(snowflake.connector.errors.ProgrammingError) as _:
         cur.execute("select * from this_table_does_not_exist")
@@ -1284,6 +1299,13 @@ def test_show_primary_keys(dcur: snowflake.connector.cursor.SnowflakeCursor):
     assert result3 == []
 
 
+def test_sqlglot_regression(cur: snowflake.connector.cursor.SnowflakeCursor):
+    assert cur.execute(
+        """with SOURCE_TABLE AS (SELECT '2024-01-01' AS start_date)
+            SELECT date(a.start_date) from SOURCE_TABLE AS a"""
+    ).fetchone() == (datetime.date(2024, 1, 1),)
+
+
 def test_sqlstate(cur: snowflake.connector.cursor.SnowflakeCursor):
     cur.execute("select 'hello world'")
     # sqlstate is None on success
@@ -1483,141 +1505,3 @@ def test_json_extract_cast_as_varchar(dcur: snowflake.connector.cursor.DictCurso
 
     dcur.execute("SELECT j:str::number as c_str_number, j:number::number as c_num_number  FROM example")
     assert dcur.fetchall() == [{"C_STR_NUMBER": 100, "C_NUM_NUMBER": 100}]
-
-
-def test_write_pandas_quoted_column_names(conn: snowflake.connector.SnowflakeConnection):
-    with conn.cursor(snowflake.connector.cursor.DictCursor) as dcur:
-        # colunmn names with spaces
-        dcur.execute('create table customers (id int, "first name" varchar)')
-        df = pd.DataFrame.from_records(
-            [
-                {"ID": 1, "first name": "Jenny"},
-                {"ID": 2, "first name": "Jasper"},
-            ]
-        )
-        snowflake.connector.pandas_tools.write_pandas(conn, df, "CUSTOMERS")
-
-        dcur.execute("select * from customers")
-
-        assert dcur.fetchall() == [
-            {"ID": 1, "first name": "Jenny"},
-            {"ID": 2, "first name": "Jasper"},
-        ]
-
-
-def test_write_pandas_array(conn: snowflake.connector.SnowflakeConnection):
-    with conn.cursor() as cur:
-        cur.execute("create table customers (ID int, FIRST_NAME varchar, LAST_NAME varchar, ORDERS array)")
-
-        df = pd.DataFrame.from_records(
-            [
-                {"ID": 1, "FIRST_NAME": "Jenny", "LAST_NAME": "P", "ORDERS": ["A", "B"]},
-                {"ID": 2, "FIRST_NAME": "Jasper", "LAST_NAME": "M", "ORDERS": ["C", "D"]},
-            ]
-        )
-        snowflake.connector.pandas_tools.write_pandas(conn, df, "CUSTOMERS")
-
-        cur.execute("select * from customers")
-
-        assert indent(cur.fetchall()) == [
-            (1, "Jenny", "P", '[\n  "A",\n  "B"\n]'),
-            (2, "Jasper", "M", '[\n  "C",\n  "D"\n]'),
-        ]
-
-
-def test_write_pandas_timestamp_ntz(conn: snowflake.connector.SnowflakeConnection):
-    # compensate for https://github.com/duckdb/duckdb/issues/7980
-    with conn.cursor() as cur:
-        cur.execute("create table example (UPDATE_AT_NTZ timestamp_ntz(9))")
-        # cur.execute("create table example (UPDATE_AT_NTZ timestamp)")
-
-        now_utc = datetime.datetime.now(pytz.utc)
-        df = pd.DataFrame([(now_utc,)], columns=["UPDATE_AT_NTZ"])
-        snowflake.connector.pandas_tools.write_pandas(conn, df, "EXAMPLE")
-
-        cur.execute("select * from example")
-
-        assert cur.fetchall() == [(now_utc.replace(tzinfo=None),)]
-
-
-def test_write_pandas_partial_columns(conn: snowflake.connector.SnowflakeConnection):
-    with conn.cursor() as cur:
-        cur.execute("create table customers (ID int, FIRST_NAME varchar, LAST_NAME varchar)")
-
-        df = pd.DataFrame.from_records(
-            [
-                {"ID": 1, "FIRST_NAME": "Jenny"},
-                {"ID": 2, "FIRST_NAME": "Jasper"},
-            ]
-        )
-        snowflake.connector.pandas_tools.write_pandas(conn, df, "CUSTOMERS")
-
-        cur.execute("select id, first_name, last_name from customers")
-
-        # columns not in dataframe will receive their default value
-        assert cur.fetchall() == [(1, "Jenny", None), (2, "Jasper", None)]
-
-
-def test_write_pandas_dict_as_varchar(conn: snowflake.connector.SnowflakeConnection):
-    with conn.cursor() as cur:
-        cur.execute("create or replace table example (vc varchar, o object)")
-
-        df = pd.DataFrame([({"kind": "vc", "count": 1}, {"kind": "obj", "amount": 2})], columns=["VC", "O"])
-        snowflake.connector.pandas_tools.write_pandas(conn, df, "EXAMPLE")
-
-        cur.execute("select * from example")
-
-        # returned values are valid json strings
-        # NB: snowflake orders object keys alphabetically, we don't
-        r = cur.fetchall()
-        assert [(sort_keys(r[0][0], indent=None), sort_keys(r[0][1], indent=2))] == [
-            ('{"count":1,"kind":"vc"}', '{\n  "amount": 2,\n  "kind": "obj"\n}')
-        ]
-
-
-def test_write_pandas_dict_different_keys(conn: snowflake.connector.SnowflakeConnection):
-    with conn.cursor() as cur:
-        cur.execute("create or replace table customers (notes variant)")
-
-        df = pd.DataFrame.from_records(
-            [
-                # rows have dicts with unique keys and values
-                {"NOTES": {"k": "v1"}},
-                # test single and double quoting
-                {"NOTES": {"k2": ["v'2", 'v"3']}},
-            ]
-        )
-        snowflake.connector.pandas_tools.write_pandas(conn, df, "CUSTOMERS")
-
-        cur.execute("select * from customers")
-
-        assert indent(cur.fetchall()) == [('{\n  "k": "v1"\n}',), ('{\n  "k2": [\n    "v\'2",\n    "v\\"3"\n  ]\n}',)]
-
-
-def indent(rows: Sequence[tuple] | Sequence[dict]) -> list[tuple]:
-    # indent duckdb json strings tuple values to match snowflake json strings
-    assert isinstance(rows[0], tuple)
-    return [
-        (*[json.dumps(json.loads(c), indent=2) if (isinstance(c, str) and c.startswith(("[", "{"))) else c for c in r],)
-        for r in rows
-    ]
-
-
-def dindent(rows: Sequence[tuple] | Sequence[dict]) -> list[dict]:
-    # indent duckdb json strings dict values to match snowflake json strings
-    assert isinstance(rows[0], dict)
-    return [
-        {
-            k: json.dumps(json.loads(v), indent=2) if (isinstance(v, str) and v.startswith(("[", "{"))) else v
-            for k, v in cast(dict, r).items()
-        }
-        for r in rows
-    ]
-
-
-def sort_keys(sdict: str, indent: int | None = 2) -> str:
-    return json.dumps(
-        json.loads(sdict, object_pairs_hook=lambda x: dict(sorted(x))),
-        indent=indent,
-        separators=None if indent else (",", ":"),
-    )

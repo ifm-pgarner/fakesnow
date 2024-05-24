@@ -55,6 +55,27 @@ def array_agg_within_group(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
+def create_clone(expression: exp.Expression) -> exp.Expression:
+    """Transform create table clone to create table as select."""
+
+    if (
+        isinstance(expression, exp.Create)
+        and str(expression.args.get("kind")).upper() == "TABLE"
+        and (clone := expression.find(exp.Clone))
+    ):
+        return exp.Create(
+            this=expression.this,
+            kind="TABLE",
+            expression=exp.Select(
+                expressions=[
+                    exp.Star(),
+                ],
+                **{"from": exp.From(this=clone.this)},
+            ),
+        )
+    return expression
+
+
 # TODO: move this into a Dialect as a transpilation
 def create_database(expression: exp.Expression, db_path: Path | None = None) -> exp.Expression:
     """Transform create database to attach database.
@@ -309,7 +330,7 @@ def extract_comment_on_table(expression: exp.Expression) -> exp.Expression:
         if props := cast(exp.Properties, expression.args.get("properties")):
             other_props = []
             for p in props.expressions:
-                if isinstance(p, exp.SchemaCommentProperty) and (isinstance(p.this, (exp.Literal, exp.Identifier))):
+                if isinstance(p, exp.SchemaCommentProperty) and (isinstance(p.this, (exp.Literal, exp.Var))):
                     comment = p.this.this
                 else:
                     other_props.append(p)
@@ -1101,12 +1122,10 @@ def timestamp_ntz_ns(expression: exp.Expression) -> exp.Expression:
 
     if (
         isinstance(expression, exp.DataType)
-        and expression.this == exp.DataType.Type.TIMESTAMP
+        and expression.this == exp.DataType.Type.TIMESTAMPNTZ
         and exp.DataTypeParam(this=exp.Literal(this="9", is_string=False)) in expression.expressions
     ):
-        new = expression.copy()
-        del new.args["expressions"]
-        return new
+        return exp.DataType(this=exp.DataType.Type.TIMESTAMP)
 
     return expression
 

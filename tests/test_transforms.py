@@ -9,6 +9,7 @@ from fakesnow.transforms import (
     _get_to_number_args,
     array_agg_within_group,
     array_size,
+    create_clone,
     create_database,
     dateadd_date_cast,
     dateadd_string_literal_timestamp_cast,
@@ -81,6 +82,13 @@ def test_array_agg_within_group() -> None:
     assert (
         sqlglot.parse_one("SELECT ARRAY_AGG(id) FROM example").transform(array_agg_within_group).sql(dialect="duckdb")
         == "SELECT ARRAY_AGG(id) FROM example"
+    )
+
+
+def test_create_clone() -> None:
+    assert (
+        sqlglot.parse_one("create table customers2 clone db1.schema1.customer").transform(create_clone).sql()
+        == "CREATE TABLE customers2 AS SELECT * FROM db1.schema1.customer"
     )
 
 
@@ -586,6 +594,10 @@ def test_show_schemas() -> None:
 
 def test_tag() -> None:
     assert sqlglot.parse_one("ALTER TABLE table1 SET TAG foo='bar'", read="snowflake").transform(tag) == SUCCESS_NOP
+    assert (
+        sqlglot.parse_one("ALTER TABLE db1.schema1.table1 SET TAG foo.bar='baz'", read="snowflake").transform(tag)
+        == SUCCESS_NOP
+    )
 
 
 def test_timestamp_ntz_ns() -> None:

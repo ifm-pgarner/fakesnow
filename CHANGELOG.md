@@ -2,6 +2,58 @@
 
 # Changelog
 
+## [0.9.13](https://github.com/tekumara/fakesnow/compare/v0.9.12...v0.9.13) (2024-05-08)
+
+
+### Features
+
+* nop regexes to ignore unimplemented commands ([f3783bb](https://github.com/tekumara/fakesnow/commit/f3783bbac5cdc1c38f777842cc39cd2b83ded5e8))
+
+
+### Chores
+
+* bump sqlglot 23.14.0 ([e1255c0](https://github.com/tekumara/fakesnow/commit/e1255c0322d18d88711c966ff09b2695ae52ea50))
+
+## [0.9.12](https://github.com/tekumara/fakesnow/compare/v0.9.11...v0.9.12) (2024-05-07)
+
+
+### Features
+
+* add write_pandas support for auto_create_table param ([b78ba1d](https://github.com/tekumara/fakesnow/commit/b78ba1ddedffbac7bed74462b07a9ea2def52ed0))
+
+## [0.9.11](https://github.com/tekumara/fakesnow/compare/v0.9.10...v0.9.11) (2024-05-07)
+
+
+### Bug Fixes
+
+* write_pandas using database and schema params ([d210c0b](https://github.com/tekumara/fakesnow/commit/d210c0b4abed024ed658a017e0bc6510f2340349))
+
+## [0.9.10](https://github.com/tekumara/fakesnow/compare/v0.9.9...v0.9.10) (2024-05-05)
+
+
+### Features
+
+* support CREATE TABLE .. CLONE ([ad049d9](https://github.com/tekumara/fakesnow/commit/ad049d99a077cec9a843a28e0efb8c8087717545))
+
+
+### Chores
+
+* **deps-dev:** bump pyright from 1.1.355 to 1.1.361 ([#85](https://github.com/tekumara/fakesnow/issues/85)) ([adfa9f0](https://github.com/tekumara/fakesnow/commit/adfa9f0d495e1377131e6d8a64f079315abebb42))
+* **deps:** update ruff requirement from ~=0.3.2 to ~=0.4.2 ([#86](https://github.com/tekumara/fakesnow/issues/86)) ([d2ec882](https://github.com/tekumara/fakesnow/commit/d2ec8827f5e250d83be07f702b5a3afb1bd5ad08))
+
+## [0.9.9](https://github.com/tekumara/fakesnow/compare/v0.9.8...v0.9.9) (2024-05-01)
+
+
+### Bug Fixes
+
+* CREATE TABLE AS with aliases and combined fields ([dbffa01](https://github.com/tekumara/fakesnow/commit/dbffa01b3abf35f8c9ed5bfda62839756fb4526c)), closes [#82](https://github.com/tekumara/fakesnow/issues/82)
+* patching in fakesnow.ipynb ([388c0ef](https://github.com/tekumara/fakesnow/commit/388c0eff80b843ad9a1a72fde58e29bad1d795a5))
+
+
+### Chores
+
+* bump sqlglot 23.12.2 ([d22facb](https://github.com/tekumara/fakesnow/commit/d22facb70d605ef7589bdbf095245504f3915482)), closes [#83](https://github.com/tekumara/fakesnow/issues/83)
+
 ## [0.9.8](https://github.com/tekumara/fakesnow/compare/v0.9.7...v0.9.8) (2024-04-19)
 
 

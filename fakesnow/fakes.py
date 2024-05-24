@@ -16,6 +16,7 @@ from sqlglot import exp
 if TYPE_CHECKING:
     import pandas as pd
     import pyarrow.lib
+import numpy as np
 import pyarrow
 import snowflake.connector.converter
 import snowflake.connector.errors
@@ -134,8 +135,11 @@ class FakeSnowflakeCursor:
                 print(f"{command};{params=}" if params else f"{command};", file=sys.stderr)
 
             command, params = self._rewrite_with_params(command, params)
-            expression = parse_one(command, read="snowflake")
-            transformed = self._transform(expression)
+            if self._conn.nop_regexes and any(re.match(p, command, re.IGNORECASE) for p in self._conn.nop_regexes):
+                transformed = transforms.SUCCESS_NOP
+            else:
+                expression = parse_one(command, read="snowflake")
+                transformed = self._transform(expression)
             return self._execute(transformed, params)
         except snowflake.connector.errors.ProgrammingError as e:
             self._sqlstate = e.sqlstate
@@ -193,6 +197,7 @@ class FakeSnowflakeCursor:
             .transform(transforms.show_users)
             .transform(transforms.create_user)
             .transform(transforms.sha256)
+            .transform(transforms.create_clone)
         )
 
     def _execute(
@@ -500,6 +505,7 @@ class FakeSnowflakeConnection:
         create_database: bool = True,
         create_schema: bool = True,
         db_path: str | os.PathLike | None = None,
+        nop_regexes: list[str] | None = None,
         *args: Any,
         **kwargs: Any,
     ):
@@ -511,6 +517,7 @@ class FakeSnowflakeConnection:
         self.database_set = False
         self.schema_set = False
         self.db_path = db_path
+        self.nop_regexes = nop_regexes
         self._paramstyle = snowflake.connector.paramstyle
 
         create_global_database(duck_conn)
@@ -605,9 +612,7 @@ class FakeSnowflakeConnection:
     def rollback(self) -> None:
         self.cursor().execute("ROLLBACK")
 
-    def _insert_df(
-        self, df: pd.DataFrame, table_name: str, database: str | None = None, schema: str | None = None
-    ) -> int:
+    def _insert_df(self, df: pd.DataFrame, table_name: str) -> int:
         # Objects in dataframes are written as parquet structs, and snowflake loads parquet structs as json strings.
         # Whereas duckdb analyses a dataframe see https://duckdb.org/docs/api/python/data_ingestion.html#pandas-dataframes--object-columns
         # and converts a object to the most specific type possible, eg: dict -> STRUCT, MAP or varchar, and list -> LIST
@@ -679,6 +684,15 @@ WritePandasResult = tuple[
 ]
 
 
+def sql_type(dtype: np.dtype) -> str:
+    if str(dtype) == "int64":
+        return "NUMBER"
+    elif str(dtype) == "object":
+        return "VARCHAR"
+    else:
+        raise NotImplementedError(f"sql_type {dtype=}")
+
+
 def write_pandas(
     conn: FakeSnowflakeConnection,
     df: pd.DataFrame,
@@ -696,7 +710,18 @@ def write_pandas(
     table_type: Literal["", "temp", "temporary", "transient"] = "",
     **kwargs: Any,
 ) -> WritePandasResult:
-    count = conn._insert_df(df, table_name, database, schema)  # noqa: SLF001
+    name = table_name
+    if schema:
+        name = f"{schema}.{name}"
+    if database:
+        name = f"{database}.{name}"
+
+    if auto_create_table:
+        cols = [f"{c} {sql_type(t)}" for c, t in df.dtypes.to_dict().items()]
+
+        conn.cursor().execute(f"CREATE TABLE IF NOT EXISTS {name} ({','.join(cols)})")
+
+    count = conn._insert_df(df, name)  # noqa: SLF001
 
     # mocks https://docs.snowflake.com/en/sql-reference/sql/copy-into-table.html#output
     mock_copy_results = [("fakesnow/file0.txt", "LOADED", count, count, 1, 0, None, None, None, None)]
