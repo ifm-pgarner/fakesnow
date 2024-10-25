@@ -1,17 +1,17 @@
 [project]
 name = "fakesnow"
 description = "Fake Snowflake Connector for Python. Run, mock and test Snowflake DB locally."
-version = "0.9.13"
+version = "0.9.25"
 readme = "README.md"
 license = { file = "LICENSE" }
 classifiers = ["License :: OSI Approved :: MIT License"]
 keywords = ["snowflake", "snowflakedb", "fake", "local", "mock", "testing"]
 requires-python = ">=3.9"
 dependencies = [
-    "duckdb~=0.10.0",
+    "duckdb~=1.0.0",
     "pyarrow",
     "snowflake-connector-python",
-    "sqlglot~=23.14.0",
+    "sqlglot~=25.9.0",
 ]
 
 [project.urls]
@@ -23,18 +23,23 @@ fakesnow = "fakesnow.cli:main"
 [project.optional-dependencies]
 dev = [
     "build~=1.0",
+    "dirty-equals",
     # to fix https://github.com/pandas-dev/pandas/issues/56995
     "pandas-stubs",
     # include compatible version of pandas, and secure-local-storage for token caching
     "snowflake-connector-python[pandas, secure-local-storage]",
     "pre-commit~=3.4",
+    "pyarrow-stubs==10.0.1.9",
     "pytest~=8.0",
-    "ruff~=0.4.2",
+    "pytest-asyncio",
+    "ruff~=0.6.3",
     "twine~=5.0",
     "snowflake-sqlalchemy~=1.5.0",
 ]
 # for debugging, see https://duckdb.org/docs/guides/python/jupyter.html
 notebook = ["duckdb-engine", "ipykernel", "jupysql"]
+# for the standalone server
+server = ["starlette", "uvicorn"]
 
 [build-system]
 requires = ["setuptools~=69.1", "wheel~=0.42"]
@@ -51,8 +56,16 @@ strictListInference = true
 strictDictionaryInference = true
 strictParameterNoneValue = true
 reportTypedDictNotRequiredAccess = false
+reportIncompatibleVariableOverride = true
 reportIncompatibleMethodOverride = true
+reportMatchNotExhaustive = true
 reportUnnecessaryTypeIgnoreComment = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# error on unhandled exceptions in background threads
+# useful for catching errors in server or snowflake connector threads
+filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
 
 [tool.ruff]
 line-length = 120

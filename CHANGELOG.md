@@ -2,6 +2,174 @@
 
 # Changelog
 
+## [0.9.25](https://github.com/tekumara/fakesnow/compare/v0.9.24...v0.9.25) (2024-09-16)
+
+
+### Features
+
+* Adds MERGE INTO transform ([#109](https://github.com/tekumara/fakesnow/issues/109)) ([d5e14a7](https://github.com/tekumara/fakesnow/commit/d5e14a79b576bcd515c20704b4b3c701d68229fc))
+* close duckdb connection ([223f8e2](https://github.com/tekumara/fakesnow/commit/223f8e21898cdc610d3003582e55b0cbaec9d1e7))
+* **server:** handle snowflake ProgrammingError ([9455a43](https://github.com/tekumara/fakesnow/commit/9455a438d7392061dd87954a5968986aa21ea87b))
+* **server:** support empty result set ([b967b69](https://github.com/tekumara/fakesnow/commit/b967b69809c0d5421caf122ad78437f39a842fd4))
+* **server:** support FAKESNOW_DB_PATH ([af79f77](https://github.com/tekumara/fakesnow/commit/af79f7728a1af2396ad8d4c88a1235112185e3c8))
+* **server:** support time & timestamp types ([1606a3e](https://github.com/tekumara/fakesnow/commit/1606a3e4570b24057a3e21e01d5b50e06c4e530b))
+* support MERGE with multiple join columns and source subqueries  ([#136](https://github.com/tekumara/fakesnow/issues/136)) ([9b5a7a0](https://github.com/tekumara/fakesnow/commit/9b5a7a08ef2c7225f1f5324dd667b5518015026e)), closes [#24](https://github.com/tekumara/fakesnow/issues/24)
+
+
+### Chores
+
+* **deps-dev:** bump pyright from 1.1.374 to 1.1.378 ([#133](https://github.com/tekumara/fakesnow/issues/133)) ([593a420](https://github.com/tekumara/fakesnow/commit/593a4205a0364149d18bc8b1aa53a71fceacce45))
+* **deps:** update ruff requirement from ~=0.5.1 to ~=0.6.3 ([#130](https://github.com/tekumara/fakesnow/issues/130)) ([6b37d8b](https://github.com/tekumara/fakesnow/commit/6b37d8bb968b9c5b2e51e8e6b76f9f517b2de532))
+
+## [0.9.24](https://github.com/tekumara/fakesnow/compare/v0.9.23...v0.9.24) (2024-08-21)
+
+
+### Bug Fixes
+
+* don't require pandas at import time ([2a7944e](https://github.com/tekumara/fakesnow/commit/2a7944eeb371c6b2180016a84dce915449520fea)), closes [#127](https://github.com/tekumara/fakesnow/issues/127)
+
+## [0.9.23](https://github.com/tekumara/fakesnow/compare/v0.9.22...v0.9.23) (2024-08-20)
+
+
+### Features
+
+* **server:** support bool, int, float types ([efd4942](https://github.com/tekumara/fakesnow/commit/efd4942dcb5246b96501fcb65448c4b5da5509cb))
+* **server:** support cur.description ([6e9c1a5](https://github.com/tekumara/fakesnow/commit/6e9c1a582e7f95e3475ad676312cc1d9d3338386))
+* support conn.is_closed() ([36dd461](https://github.com/tekumara/fakesnow/commit/36dd4612017626e044cc26032acac6a998a59d58)), closes [#125](https://github.com/tekumara/fakesnow/issues/125)
+
+## [0.9.22](https://github.com/tekumara/fakesnow/compare/v0.9.21...v0.9.22) (2024-08-11)
+
+
+### Features
+
+* DESCRIBE VIEW ([b874fc1](https://github.com/tekumara/fakesnow/commit/b874fc1ed511c8943cc5a4c0a66628068c737167))
+* describe view information_schema.* ([facc390](https://github.com/tekumara/fakesnow/commit/facc390a55c976749cba6258c457ca131ab1fcc5))
+
+
+### Bug Fixes
+
+* column types for DESCRIBE ([572eaf5](https://github.com/tekumara/fakesnow/commit/572eaf58d8b268559687185fd543da0a777e956a))
+* fetchmany supports irregular sizes ([3115afd](https://github.com/tekumara/fakesnow/commit/3115afd35a66f95eed3b1e4fb92dca0660c8b709))
+* log all sql executed (in debug mode) ([6faa120](https://github.com/tekumara/fakesnow/commit/6faa120b17434f405d3e221f0770c15936bb4c94))
+
+
+### Chores
+
+* **deps:** update sqlglot requirement from ~=25.5.1 to ~=25.9.0 ([#123](https://github.com/tekumara/fakesnow/issues/123)) ([da78574](https://github.com/tekumara/fakesnow/commit/da78574e682c742d42c727b8bd67cb4447e02f5d))
+
+## [0.9.21](https://github.com/tekumara/fakesnow/compare/v0.9.20...v0.9.21) (2024-08-04)
+
+
+### Features
+
+* alter table cluster by ([9a78fc2](https://github.com/tekumara/fakesnow/commit/9a78fc2658d3da8838c93381e10b4142405fb2b6))
+
+
+### Bug Fixes
+
+* Allow connection with schema=information_schema ([#122](https://github.com/tekumara/fakesnow/issues/122)) ([51e4e68](https://github.com/tekumara/fakesnow/commit/51e4e685f7c78bd520e88ef5351d39601b81a276))
+* columns returned by describe view information_schema.columns ([83c62b6](https://github.com/tekumara/fakesnow/commit/83c62b6a1fdf38a864ffee8fb40a1cef3dcb9057))
+* Ensure type column in information_schema views is not null ([#121](https://github.com/tekumara/fakesnow/issues/121)) ([7340a4a](https://github.com/tekumara/fakesnow/commit/7340a4a55d0657579ec1b158a1219751c6c7c84f))
+* Only set variables for SetItem expressions ([#116](https://github.com/tekumara/fakesnow/issues/116)) ([0e0711c](https://github.com/tekumara/fakesnow/commit/0e0711c821fa8487bd94a9c10d14103a3a3c71c4))
+
+
+### Chores
+
+* bump sqlglot 25.5.1 ([713d93d](https://github.com/tekumara/fakesnow/commit/713d93d06fd3fb67064fc8f67b728b1bc0152628))
+* cruft update ([72b791b](https://github.com/tekumara/fakesnow/commit/72b791b186bf5147a3737733d38bc6bbb39dcb10))
+* **deps-dev:** bump pyright from 1.1.369 to 1.1.374 ([#118](https://github.com/tekumara/fakesnow/issues/118)) ([17a8760](https://github.com/tekumara/fakesnow/commit/17a876004114ae6382dd7febae39598932ed1e42))
+
+## [0.9.20](https://github.com/tekumara/fakesnow/compare/v0.9.19...v0.9.20) (2024-07-10)
+
+
+### Features
+
+* SHOW PRIMARY KEYS for table ([#114](https://github.com/tekumara/fakesnow/issues/114)) ([2c006b3](https://github.com/tekumara/fakesnow/commit/2c006b31c4f1f4e39ac6bb5d435182ec7d43e938))
+
+
+### Bug Fixes
+
+* $$  not considered a variable ([235fbc1](https://github.com/tekumara/fakesnow/commit/235fbc16081e85d309f911ae0662fc4332f14de0))
+* concurrent connection write-write conflict ([96ba682](https://github.com/tekumara/fakesnow/commit/96ba6826d879fdcab6bb1bf4e0aea3a3f2d406cc))
+
+## [0.9.19](https://github.com/tekumara/fakesnow/compare/v0.9.18...v0.9.19) (2024-07-08)
+
+
+### Features
+
+* Implements basic snowflake session variables via SET/UNSET ([#111](https://github.com/tekumara/fakesnow/issues/111)) ([7696cbd](https://github.com/tekumara/fakesnow/commit/7696cbdae629971f7f61546be4301c35dd9e8173))
+
+
+### Chores
+
+* **deps-dev:** bump pyright from 1.1.366 to 1.1.369 ([#112](https://github.com/tekumara/fakesnow/issues/112)) ([7656ab9](https://github.com/tekumara/fakesnow/commit/7656ab910034e166e2b92703bf9af5a7f7fb1668))
+
+## [0.9.18](https://github.com/tekumara/fakesnow/compare/v0.9.17...v0.9.18) (2024-06-29)
+
+
+### Bug Fixes
+
+* execute_string ignores comments ([e6513f7](https://github.com/tekumara/fakesnow/commit/e6513f79e50af5c97634849d4be02b818ab7e796))
+* Support IF NOT EXISTS in CREATE DATABASE statements ([#108](https://github.com/tekumara/fakesnow/issues/108)) ([e7f3f97](https://github.com/tekumara/fakesnow/commit/e7f3f97b26fccc7758892d004e1bfab339d9c732))
+
+## [0.9.17](https://github.com/tekumara/fakesnow/compare/v0.9.16...v0.9.17) (2024-06-23)
+
+
+### Features
+
+* SPLIT ([28f0d98](https://github.com/tekumara/fakesnow/commit/28f0d98ef863b55964f14393b0b7417d4bd83ccc))
+
+
+### Bug Fixes
+
+* ARRAY_AGG with OVER ([6d94c61](https://github.com/tekumara/fakesnow/commit/6d94c613dfc8ecfcf268ac769a56d41d777bdebf)), closes [#92](https://github.com/tekumara/fakesnow/issues/92)
+* flatten VALUE cast to varchar as raw string ([818efcc](https://github.com/tekumara/fakesnow/commit/818efccacf36fecc71bf61385c192e0f0cc596eb))
+* more selective flatten_value_cast_as_varchar ([7748fbf](https://github.com/tekumara/fakesnow/commit/7748fbf10db59919759acd37d2ad9cc5f1c57349))
+
+
+### Chores
+
+* **deps:** update duckdb requirement from ~=0.10.3 to ~=1.0.0 ([#107](https://github.com/tekumara/fakesnow/issues/107)) ([8ead354](https://github.com/tekumara/fakesnow/commit/8ead354202b096559605b218358dc96a2ff4058c))
+* **deps:** update sqlglot requirement from ~=24.1.0 to ~=25.3.0 ([#106](https://github.com/tekumara/fakesnow/issues/106)) ([89bee6f](https://github.com/tekumara/fakesnow/commit/89bee6f06e9adc99e8524c03e91cc173e6c2b8d3))
+
+## [0.9.16](https://github.com/tekumara/fakesnow/compare/v0.9.15...v0.9.16) (2024-06-21)
+
+
+### Bug Fixes
+
+* CREATE DATABASE when using db_path ([#103](https://github.com/tekumara/fakesnow/issues/103)) ([1f6db72](https://github.com/tekumara/fakesnow/commit/1f6db72d25691fe484256b77ac5d1ce2d5ee72d2))
+
+## [0.9.15](https://github.com/tekumara/fakesnow/compare/v0.9.14...v0.9.15) (2024-06-07)
+
+
+### Bug Fixes
+
+* ALTER TABLE result output ([#100](https://github.com/tekumara/fakesnow/issues/100)) ([3e0e236](https://github.com/tekumara/fakesnow/commit/3e0e236fe630e41062f9ad5edb1a889f039b617b))
+
+
+### Chores
+
+* **deps-dev:** bump pyright from 1.1.361 to 1.1.366 ([#102](https://github.com/tekumara/fakesnow/issues/102)) ([81839a4](https://github.com/tekumara/fakesnow/commit/81839a4cabf2c694c0c5eca582a469ca4cf29a53))
+
+## [0.9.14](https://github.com/tekumara/fakesnow/compare/v0.9.13...v0.9.14) (2024-06-02)
+
+
+### Features
+
+* support alias in join ([8d31dce](https://github.com/tekumara/fakesnow/commit/8d31dcec4f8b25089fa49d8baad796836785b553)), closes [#90](https://github.com/tekumara/fakesnow/issues/90)
+* support TIMESTAMP_NTZ ([0493ce6](https://github.com/tekumara/fakesnow/commit/0493ce6e068931d25c5f2fef333e135c2f0988a0)), closes [#96](https://github.com/tekumara/fakesnow/issues/96)
+
+
+### Bug Fixes
+
+* CREATE TAG is a no-op ([5085b59](https://github.com/tekumara/fakesnow/commit/5085b599b5b666b426ef727dd5536d96ccb6777c)), closes [#94](https://github.com/tekumara/fakesnow/issues/94)
+
+
+### Chores
+
+* bump duckdb 0.10.3 ([7c2a29b](https://github.com/tekumara/fakesnow/commit/7c2a29bd65c84b046e77f238921ee27ed0c90167))
+* bump sqlglot 24.1.0 ([d3750be](https://github.com/tekumara/fakesnow/commit/d3750be9c81bdb93f3c8ef0ea30ed24aa2b72cfc))
+
 ## [0.9.13](https://github.com/tekumara/fakesnow/compare/v0.9.12...v0.9.13) (2024-05-08)
 
 

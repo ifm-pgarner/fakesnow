@@ -7,6 +7,9 @@ from sqlglot import exp
 from fakesnow.transforms import (
     SUCCESS_NOP,
     _get_to_number_args,
+    alias_in_join,
+    alter_table_strip_cluster_by,
+    array_agg,
     array_agg_within_group,
     array_size,
     create_clone,
@@ -20,6 +23,7 @@ from fakesnow.transforms import (
     extract_comment_on_table,
     extract_text_length,
     flatten,
+    flatten_value_cast_as_varchar,
     float_to_double,
     identifier,
     indices_to_json_extract,
@@ -39,8 +43,9 @@ from fakesnow.transforms import (
     sha256,
     show_objects_tables,
     show_schemas,
+    split,
     tag,
-    timestamp_ntz_ns,
+    timestamp_ntz,
     to_date,
     to_decimal,
     to_timestamp,
@@ -53,10 +58,50 @@ from fakesnow.transforms import (
 )
 
 
+def test_alias_in_join() -> None:
+    assert (
+        sqlglot.parse_one("""
+            SELECT
+                T.COL
+                , SUBSTR(T.COL, 4) AS ALIAS
+                , J.ANOTHER
+            FROM TEST AS T
+            LEFT JOIN JOINED AS J
+            ON ALIAS = J.COL
+        """)
+        .transform(alias_in_join)
+        .sql()
+        == "SELECT T.COL, SUBSTR(T.COL, 4) AS ALIAS, J.ANOTHER FROM TEST AS T LEFT JOIN JOINED AS J ON SUBSTR(T.COL, 4) = J.COL"  # noqa: E501
+    )
+
+
+def test_alter_table_strip_cluster_by() -> None:
+    assert (
+        sqlglot.parse_one("alter table table1 cluster by (name)").transform(alter_table_strip_cluster_by).sql()
+        == "SELECT 'Statement executed successfully.' AS status"
+    )
+
+
 def test_array_size() -> None:
     assert (
         sqlglot.parse_one("""select array_size(parse_json('["a","b"]'))""").transform(array_size).sql(dialect="duckdb")
         == """SELECT CASE WHEN JSON_ARRAY_LENGTH(JSON('["a","b"]')) THEN JSON_ARRAY_LENGTH(JSON('["a","b"]')) END"""
+    )
+
+
+def test_array_agg() -> None:
+    assert (
+        sqlglot.parse_one("SELECT ARRAY_AGG(name) AS names FROM table1").transform(array_agg).sql(dialect="duckdb")
+        == "SELECT TO_JSON(ARRAY_AGG(name)) AS names FROM table1"
+    )
+
+    assert (
+        sqlglot.parse_one(
+            "SELECT DISTINCT ID, ANOTHER, ARRAY_AGG(DISTINCT COL) OVER(PARTITION BY ID) AS COLS FROM TEST"
+        )
+        .transform(array_agg)
+        .sql(dialect="duckdb")
+        == "SELECT DISTINCT ID, ANOTHER, TO_JSON(ARRAY_AGG(DISTINCT COL) OVER (PARTITION BY ID)) AS COLS FROM TEST"
     )
 
 
@@ -107,6 +152,13 @@ def test_create_database() -> None:
         == "ATTACH DATABASE '.databases/foobar.db' AS foobar"
     )
 
+    assert (
+        sqlglot.parse_one("create database if not exists foobar")
+        .transform(create_database, db_path=Path(".databases/"))
+        .sql()
+        == "ATTACH IF NOT EXISTS DATABASE '.databases/foobar.db' AS foobar"
+    )
+
 
 def test_describe_table() -> None:
     assert "SELECT" in sqlglot.parse_one("describe table db1.schema1.table1").transform(describe_table).sql()
@@ -114,7 +166,7 @@ def test_describe_table() -> None:
 
 def test_drop_schema_cascade() -> None:
     assert (
-        sqlglot.parse_one("drop schema schema1").transform(drop_schema_cascade).sql() == "DROP schema schema1 CASCADE"
+        sqlglot.parse_one("drop schema schema1").transform(drop_schema_cascade).sql() == "DROP SCHEMA schema1 CASCADE"
     )
 
 
@@ -298,7 +350,7 @@ def test_extract_comment_on_columns() -> None:
     e = sqlglot.parse_one("ALTER TABLE ingredients ALTER amount COMMENT 'tablespoons'").transform(
         extract_comment_on_columns
     )
-    assert e.sql() == "SELECT 'Statement executed successfully.'"
+    assert e.sql() == "SELECT 'Statement executed successfully.' AS status"
     assert e.args["col_comments"] == [("amount", "tablespoons")]
 
     # TODO
@@ -321,19 +373,19 @@ def test_extract_comment_on_table() -> None:
     assert e.args["table_comment"] == (table1, "foobar")
 
     e = sqlglot.parse_one("COMMENT ON TABLE table1 IS 'comment1'").transform(extract_comment_on_table)
-    assert e.sql() == "SELECT 'Statement executed successfully.'"
+    assert e.sql() == "SELECT 'Statement executed successfully.' AS status"
     assert e.args["table_comment"] == (table1, "comment1")
 
     e = sqlglot.parse_one("COMMENT ON TABLE table1 IS $$comment2$$", read="snowflake").transform(
         extract_comment_on_table
     )
-    assert e.sql() == "SELECT 'Statement executed successfully.'"
+    assert e.sql() == "SELECT 'Statement executed successfully.' AS status"
     assert e.args["table_comment"] == (table1, "comment2")
 
     e = sqlglot.parse_one("ALTER TABLE table1 SET COMMENT = 'comment1'", read="snowflake").transform(
         extract_comment_on_table
     )
-    assert e.sql() == "SELECT 'Statement executed successfully.'"
+    assert e.sql() == "SELECT 'Statement executed successfully.' AS status"
     assert e.args["table_comment"] == (table1, "comment1")
 
 
@@ -382,6 +434,22 @@ def test_flatten() -> None:
     )
 
 
+def test_flatten_value_cast_as_varchar() -> None:
+    assert (
+        sqlglot.parse_one(
+            """
+            SELECT ID , F.VALUE::varchar as V
+            FROM TEST AS T
+            , LATERAL FLATTEN(input => SPLIT(T.COL, ',')) AS F;
+            """,
+            read="snowflake",
+        )
+        .transform(flatten_value_cast_as_varchar)
+        .sql(dialect="duckdb")
+        == """SELECT ID, F.VALUE ->> '$' AS V FROM TEST AS T, LATERAL UNNEST(input => STR_SPLIT(T.COL, ',')) AS F(SEQ, KEY, PATH, INDEX, VALUE, THIS)"""  # noqa: E501
+    )
+
+
 def test_float_to_double() -> None:
     assert (
         sqlglot.parse_one("create table example (f float, f4 float4, f8 float8, d double, r real)")
@@ -422,7 +490,7 @@ def test_integer_precision() -> None:
         )
         .transform(integer_precision)
         .sql(dialect="duckdb")
-        == "CREATE TABLE example (XNUMBER82 DECIMAL(8, 2), XNUMBER BIGINT, XDECIMAL BIGINT, XNUMERIC BIGINT, XINT BIGINT, XINTEGER BIGINT, XBIGINT BIGINT, XSMALLINT BIGINT, XTINYINT BIGINT, XBYTEINT BIGINT)"  # noqa: E501
+        == "CREATE TABLE example (XNUMBER82 DECIMAL(8, 2), XNUMBER DECIMAL(38, 0), XDECIMAL DECIMAL(38, 0), XNUMERIC DECIMAL(38, 0), XINT BIGINT, XINTEGER BIGINT, XBIGINT BIGINT, XSMALLINT BIGINT, XTINYINT BIGINT, XBYTEINT BIGINT)"  # noqa: E501
     )
 
 
@@ -471,17 +539,17 @@ def test_json_extract_cast_as_varchar() -> None:
         )
         .transform(json_extract_cast_as_varchar)
         .sql(dialect="duckdb")
-        == """SELECT JSON('{"fruit":"banana"}') ->> '$.fruit'"""
+        == """SELECT CAST(JSON('{"fruit":"banana"}') ->> '$.fruit' AS TEXT)"""
     )
 
     assert (
         sqlglot.parse_one(
-            """select parse_json('{"fruit":"9000"}'):fruit::number""",
+            """select parse_json('{"count":"9000"}'):count::number""",
             read="snowflake",
         )
         .transform(json_extract_cast_as_varchar)
         .sql(dialect="duckdb")
-        == """SELECT CAST(JSON('{"fruit":"9000"}') -> '$.fruit' AS DECIMAL)"""
+        == """SELECT CAST(JSON('{"count":"9000"}') ->> '$.count' AS DECIMAL(38, 0))"""
     )
 
 
@@ -592,10 +660,24 @@ def test_show_schemas() -> None:
     )
 
 
+def test_split() -> None:
+    assert (
+        sqlglot.parse_one("SELECT split('a,b,c', ',')").transform(split).sql() == "SELECT TO_JSON(SPLIT('a,b,c', ','))"
+    )
+
+
 def test_tag() -> None:
     assert sqlglot.parse_one("ALTER TABLE table1 SET TAG foo='bar'", read="snowflake").transform(tag) == SUCCESS_NOP
     assert (
         sqlglot.parse_one("ALTER TABLE db1.schema1.table1 SET TAG foo.bar='baz'", read="snowflake").transform(tag)
+        == SUCCESS_NOP
+    )
+    assert (
+        sqlglot.parse_one("ALTER TABLE table1 MODIFY COLUMN name1 SET TAG foo='bar'", read="snowflake").transform(tag)
+        == SUCCESS_NOP
+    )
+    assert (
+        sqlglot.parse_one("CREATE TAG cost_center COMMENT = 'cost_center tag'", read="snowflake").transform(tag)
         == SUCCESS_NOP
     )
 
@@ -603,7 +685,7 @@ def test_tag() -> None:
 def test_timestamp_ntz_ns() -> None:
     assert (
         sqlglot.parse_one("CREATE TABLE table1(ts TIMESTAMP_NTZ(9))", read="snowflake")
-        .transform(timestamp_ntz_ns)
+        .transform(timestamp_ntz)
         .sql(dialect="duckdb")
         == "CREATE TABLE table1 (ts TIMESTAMP)"
     )

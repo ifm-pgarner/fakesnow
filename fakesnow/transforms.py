@@ -7,10 +7,43 @@ from typing import ClassVar, Literal, cast
 import sqlglot
 from sqlglot import exp
 
-from fakesnow.global_database import USERS_TABLE_FQ_NAME
+from fakesnow import transforms_merge
+from fakesnow.instance import USERS_TABLE_FQ_NAME
+from fakesnow.variables import Variables
 
 MISSING_DATABASE = "missing_database"
-SUCCESS_NOP = sqlglot.parse_one("SELECT 'Statement executed successfully.'")
+SUCCESS_NOP = sqlglot.parse_one("SELECT 'Statement executed successfully.' as status")
+
+
+def alias_in_join(expression: exp.Expression) -> exp.Expression:
+    if (
+        isinstance(expression, exp.Select)
+        and (aliases := {e.args.get("alias"): e for e in expression.expressions if isinstance(e, exp.Alias)})
+        and (joins := expression.args.get("joins"))
+    ):
+        j: exp.Join
+        for j in joins:
+            if (
+                (on := j.args.get("on"))
+                and (col := on.this)
+                and (isinstance(col, exp.Column))
+                and (alias := aliases.get(col.this))
+            ):
+                col.args["this"] = alias.this
+
+    return expression
+
+
+def alter_table_strip_cluster_by(expression: exp.Expression) -> exp.Expression:
+    """Turn alter table cluster by into a no-op"""
+    if (
+        isinstance(expression, exp.AlterTable)
+        and (actions := expression.args.get("actions"))
+        and len(actions) == 1
+        and (isinstance(actions[0], exp.Cluster))
+    ):
+        return SUCCESS_NOP
+    return expression
 
 
 def array_size(expression: exp.Expression) -> exp.Expression:
@@ -22,8 +55,11 @@ def array_size(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
-def array_agg_to_json(expression: exp.Expression) -> exp.Expression:
-    if isinstance(expression, exp.ArrayAgg):
+def array_agg(expression: exp.Expression) -> exp.Expression:
+    if isinstance(expression, exp.ArrayAgg) and not isinstance(expression.parent, exp.Window):
+        return exp.Anonymous(this="TO_JSON", expressions=[expression])
+
+    if isinstance(expression, exp.Window) and isinstance(expression.this, exp.ArrayAgg):
         return exp.Anonymous(this="TO_JSON", expressions=[expression])
 
     return expression
@@ -97,9 +133,11 @@ def create_database(expression: exp.Expression, db_path: Path | None = None) -> 
         db_name = ident.this
         db_file = f"{db_path/db_name}.db" if db_path else ":memory:"
 
+        if_not_exists = "IF NOT EXISTS " if expression.args.get("exists") else ""
+
         return exp.Command(
             this="ATTACH",
-            expression=exp.Literal(this=f"DATABASE '{db_file}' AS {db_name}", is_string=True),
+            expression=exp.Literal(this=f"{if_not_exists}DATABASE '{db_file}' AS {db_name}", is_string=True),
             create_db_name=db_name,
         )
 
@@ -122,14 +160,33 @@ SELECT
     column_default AS "default",
     'N' AS "primary key",
     'N' AS "unique key",
-    NULL AS "check",
-    NULL AS "expression",
-    NULL AS "comment",
-    NULL AS "policy name",
-    NULL AS "privacy domain",
+    NULL::VARCHAR AS "check",
+    NULL::VARCHAR AS "expression",
+    NULL::VARCHAR AS "comment",
+    NULL::VARCHAR AS "policy name",
+    NULL::JSON AS "privacy domain",
 FROM information_schema._fs_columns_snowflake
 WHERE table_catalog = '${catalog}' AND table_schema = '${schema}' AND table_name = '${table}'
 ORDER BY ordinal_position
+"""
+)
+
+SQL_DESCRIBE_INFO_SCHEMA = Template(
+    """
+SELECT
+    column_name AS "name",
+    column_type as "type",
+    'COLUMN' AS "kind",
+    CASE WHEN "null" = 'YES' THEN 'Y' ELSE 'N' END AS "null?",
+    NULL::VARCHAR AS "default",
+    'N' AS "primary key",
+    'N' AS "unique key",
+    NULL::VARCHAR AS "check",
+    NULL::VARCHAR AS "expression",
+    NULL::VARCHAR AS "comment",
+    NULL::VARCHAR AS "policy name",
+    NULL::JSON AS "privacy domain",
+FROM (DESCRIBE information_schema.${view})
 """
 )
 
@@ -137,7 +194,7 @@ ORDER BY ordinal_position
 def describe_table(
     expression: exp.Expression, current_database: str | None = None, current_schema: str | None = None
 ) -> exp.Expression:
-    """Redirect to the information_schema._fs_describe_table to match snowflake.
+    """Redirect to the information_schema._fs_columns_snowflake to match snowflake.
 
     See https://docs.snowflake.com/en/sql-reference/sql/desc-table
     """
@@ -146,11 +203,15 @@ def describe_table(
         isinstance(expression, exp.Describe)
         and (kind := expression.args.get("kind"))
         and isinstance(kind, str)
-        and kind.upper() == "TABLE"
+        and kind.upper() in ("TABLE", "VIEW")
         and (table := expression.find(exp.Table))
     ):
         catalog = table.catalog or current_database
         schema = table.db or current_schema
+
+        if schema and schema.upper() == "INFORMATION_SCHEMA":
+            # information schema views don't exist in _fs_columns_snowflake
+            return sqlglot.parse_one(SQL_DESCRIBE_INFO_SCHEMA.substitute(view=table.name), read="duckdb")
 
         return sqlglot.parse_one(
             SQL_DESCRIBE_TABLE.substitute(catalog=catalog, schema=schema, table=table.name),
@@ -350,17 +411,13 @@ def extract_comment_on_table(expression: exp.Expression) -> exp.Expression:
         return new
     elif (
         isinstance(expression, exp.AlterTable)
-        and (sexp := expression.find(exp.Set))
-        and not sexp.args["tag"]
-        and (eq := sexp.find(exp.EQ))
-        and (eid := eq.find(exp.Identifier))
-        and isinstance(eid.this, str)
-        and eid.this.upper() == "COMMENT"
-        and (lit := eq.find(exp.Literal))
+        and (sexp := expression.find(exp.AlterSet))
+        and (scp := sexp.find(exp.SchemaCommentProperty))
+        and isinstance(scp.this, exp.Literal)
         and (table := expression.find(exp.Table))
     ):
         new = SUCCESS_NOP.copy()
-        new.args["table_comment"] = (table, lit.this)
+        new.args["table_comment"] = (table, scp.this.this)
         return new
 
     return expression
@@ -421,7 +478,7 @@ def flatten(expression: exp.Expression) -> exp.Expression:
         isinstance(expression, exp.Lateral)
         and isinstance(expression.this, exp.Explode)
         and (alias := expression.args.get("alias"))
-        # always true; when no explicit alias provided this will be _flattened
+        # always true; when no explicit alias provided this will be flattened
         and isinstance(alias, exp.TableAlias)
     ):
         explode_expression = expression.this.this.expression
@@ -441,6 +498,25 @@ def flatten(expression: exp.Expression) -> exp.Expression:
             ),
             alias=exp.TableAlias(this=alias.this, columns=[exp.Identifier(this="VALUE", quoted=False)]),
         )
+
+    return expression
+
+
+def flatten_value_cast_as_varchar(expression: exp.Expression) -> exp.Expression:
+    """Return raw unquoted string when flatten VALUE is cast to varchar.
+
+    Returns a raw string using the Duckdb ->> operator, aka the json_extract_string function, see
+    https://duckdb.org/docs/extensions/json#json-extraction-functions
+    """
+    if (
+        isinstance(expression, exp.Cast)
+        and isinstance(expression.this, exp.Column)
+        and expression.this.name.upper() == "VALUE"
+        and expression.to.this in [exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT]
+        and (select := expression.find_ancestor(exp.Select))
+        and select.find(exp.Explode)
+    ):
+        return exp.JSONExtractScalar(this=expression.this, expression=exp.JSONPath(expressions=[exp.JSONPathRoot()]))
 
     return expression
 
@@ -511,12 +587,13 @@ def information_schema_fs_columns_snowflake(expression: exp.Expression) -> exp.E
     """
 
     if (
-        isinstance(expression, exp.Select)
-        and (tbl_exp := expression.find(exp.Table))
-        and tbl_exp.name.upper() == "COLUMNS"
-        and tbl_exp.db.upper() == "INFORMATION_SCHEMA"
+        isinstance(expression, exp.Table)
+        and expression.db
+        and expression.db.upper() == "INFORMATION_SCHEMA"
+        and expression.name
+        and expression.name.upper() == "COLUMNS"
     ):
-        tbl_exp.set("this", exp.Identifier(this="_FS_COLUMNS_SNOWFLAKE", quoted=False))
+        expression.set("this", exp.Identifier(this="_FS_COLUMNS_SNOWFLAKE", quoted=False))
 
     return expression
 
@@ -596,15 +673,12 @@ def json_extract_cast_as_varchar(expression: exp.Expression) -> exp.Expression:
     """
     if (
         isinstance(expression, exp.Cast)
-        and (to := expression.to)
-        and isinstance(to, exp.DataType)
-        and to.this in {exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT}
         and (je := expression.this)
         and isinstance(je, exp.JSONExtract)
         and (path := je.expression)
         and isinstance(path, exp.JSONPath)
     ):
-        return exp.JSONExtractScalar(this=je.this, expression=path)
+        je.replace(exp.JSONExtractScalar(this=je.this, expression=path))
     return expression
 
 
@@ -616,6 +690,10 @@ def json_extract_precedence(expression: exp.Expression) -> exp.Expression:
     if isinstance(expression, (exp.JSONExtract, exp.JSONExtractScalar)):
         return exp.Paren(this=expression)
     return expression
+
+
+def merge(expression: exp.Expression) -> list[exp.Expression]:
+    return transforms_merge.merge(expression)
 
 
 def random(expression: exp.Expression) -> exp.Expression:
@@ -919,6 +997,16 @@ def show_schemas(expression: exp.Expression, current_database: str | None = None
     return expression
 
 
+def split(expression: exp.Expression) -> exp.Expression:
+    """
+    Convert output of duckdb str_split from varchar[] to JSON array to match Snowflake.
+    """
+    if isinstance(expression, exp.Split):
+        return exp.Anonymous(this="to_json", expressions=[expression])
+
+    return expression
+
+
 def tag(expression: exp.Expression) -> exp.Expression:
     """Handle tags. Transfer tags into upserts of the tag table.
 
@@ -937,7 +1025,7 @@ def tag(expression: exp.Expression) -> exp.Expression:
 
     if isinstance(expression, exp.AlterTable) and (actions := expression.args.get("actions")):
         for a in actions:
-            if isinstance(a, exp.Set) and a.args["tag"]:
+            if isinstance(a, exp.AlterSet) and a.args.get("tag"):
                 return SUCCESS_NOP
     elif (
         isinstance(expression, exp.Command)
@@ -946,6 +1034,13 @@ def tag(expression: exp.Expression) -> exp.Expression:
         and "SET TAG" in cexp.upper()
     ):
         # alter table modify column set tag
+        return SUCCESS_NOP
+    elif (
+        isinstance(expression, exp.Create)
+        and (kind := expression.args.get("kind"))
+        and isinstance(kind, str)
+        and kind.upper() == "TAG"
+    ):
         return SUCCESS_NOP
 
     return expression
@@ -1114,17 +1209,15 @@ def to_timestamp_ntz(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
-def timestamp_ntz_ns(expression: exp.Expression) -> exp.Expression:
-    """Convert timestamp_ntz(9) to timestamp_ntz.
+def timestamp_ntz(expression: exp.Expression) -> exp.Expression:
+    """Convert timestamp_ntz (snowflake) to timestamp (duckdb).
 
-    To compensate for https://github.com/duckdb/duckdb/issues/7980
+    NB: timestamp_ntz defaults to nanosecond precision (ie: NTZ(9)). The duckdb equivalent is TIMESTAMP_NS.
+    However we use TIMESTAMP (ie: microsecond precision) here rather than TIMESTAMP_NS to avoid
+    https://github.com/duckdb/duckdb/issues/7980 in test_write_pandas_timestamp_ntz.
     """
 
-    if (
-        isinstance(expression, exp.DataType)
-        and expression.this == exp.DataType.Type.TIMESTAMPNTZ
-        and exp.DataTypeParam(this=exp.Literal(this="9", is_string=False)) in expression.expressions
-    ):
+    if isinstance(expression, exp.DataType) and expression.this == exp.DataType.Type.TIMESTAMPNTZ:
         return exp.DataType(this=exp.DataType.Type.TIMESTAMP)
 
     return expression
@@ -1173,7 +1266,6 @@ def try_parse_json(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
-# sqlglot.parse_one("create table example(date TIMESTAMP_NTZ(9));", read="snowflake")
 def semi_structured_types(expression: exp.Expression) -> exp.Expression:
     """Convert OBJECT, ARRAY, and VARIANT types to duckdb compatible types.
 
@@ -1351,9 +1443,24 @@ def show_keys(
 
                 if schema:
                     statement += f"AND schema_name = '{schema}' "
+            elif scope_kind == "TABLE":
+                if not table:
+                    raise ValueError(f"SHOW PRIMARY KEYS with {scope_kind} scope requires a table")
+
+                statement += f"AND table_name = '{table.name}' "
             else:
                 raise NotImplementedError(f"SHOW PRIMARY KEYS with {scope_kind} not yet supported")
         return sqlglot.parse_one(statement)
+    return expression
+
+
+def update_variables(
+    expression: exp.Expression,
+    variables: Variables,
+) -> exp.Expression:
+    if Variables.is_variable_modifier(expression):
+        variables.update_variables(expression)
+        return SUCCESS_NOP  # Nothing further to do if its a SET/UNSET operation.
     return expression
 
 
